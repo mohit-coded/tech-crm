@@ -20,8 +20,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - Every tenant-scoped model must use the `BelongsToLocation` trait/global scope
 - Migrations: one feature per PR, always include down()
 - Write feature tests for controllers, unit tests for services
+- Every controller/relation change must be covered by a feature test before being marked complete — Phase 1b caught a missing relation this way
 
-## Build order (Phase 1a complete: multi-tenancy foundation. Phase 1b in progress: auth wiring + multi-location membership.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
