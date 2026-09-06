@@ -50,9 +50,24 @@ class User extends Authenticatable
         ];
     }
 
+    /**
+     * The location this user is currently acting in. Determines tenant
+     * scoping (see BelongsToLocation) but not which locations the user
+     * may switch into — that's governed by locations().
+     */
     public function currentLocation(): BelongsTo
     {
         return $this->belongsTo(Location::class, 'current_location_id');
+    }
+
+    /**
+     * Locations this user is a member of and may switch into.
+     */
+    public function locations(): BelongsToMany
+    {
+        return $this->belongsToMany(Location::class, 'location_user')
+            ->withPivot('role')
+            ->withTimestamps();
     }
 }
 
