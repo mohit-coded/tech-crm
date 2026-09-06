@@ -39,6 +39,14 @@ GitHub: mohit-coded/tech-crm (private), main branch
 ### Multi-location membership (Phase 1b)
 - `location_user` pivot table (user_id, location_id, role) tracks which
   locations a user belongs to and their role there.
+- Registration (`RegisteredUserController@store`) now creates a tenant
+  per signup, not just a user: it takes a required "Business Name"
+  field and, in a single DB transaction, creates the `User`, creates a
+  `Location` named after it, attaches the user to that `Location` via
+  `location_user` with role `owner`, and sets the user's
+  `current_location_id` to it. If any step fails the whole thing rolls
+  back — no orphaned `User` or `Location`. See
+  `tests/Feature/Auth/RegistrationTest.php`.
 - `users.current_location_id` still represents the user's single
   *currently active* location — that's unchanged and is still what
   `BelongsToLocation`'s global scope keys off of.
