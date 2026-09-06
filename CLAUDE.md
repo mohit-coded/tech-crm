@@ -44,4 +44,38 @@ GitHub: mohit-coded/tech-crm (private), main branch
   (`User::locations()` / `Location::users()`), not via
   `current_location_id`. `LocationSwitchController@switch` checks
   pivot membership (403 if none) before updating
-  `current_location_id`.
+  `current_location_id`.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
+Oh.
+Hey, I'm about to do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I The Kalapuzhya thinnest, which you think I like.
+You are thinnest.
+I am not that.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
+Oh.
+Hey, I'm about to do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I Yaar thinna? Ahmaaa, idan japdiyil.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
+Oh.
+Hey, I'm about to do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I Ah... Ah, ma... Ah, gan japtigul.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
+Oh.
+Hey, I'm about to do phone call.
+Hey, I'm gonna do phone call.
+Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
+Oh.
+Hey, I'm about to do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+Hey, I'm gonna do phone call.
+You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I Wallet. It. Oh, and wallet. They have to do it like this, right? I'm, I'm a Bam boom, I don't I Just answer After pasting Mavi, Mavi mavii, La la la la la la la, I I am a I I see that my leg, I need to know my leg, but I am a little bit of a numb leg, but I am a little bit of a numb leg, God.
