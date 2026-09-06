@@ -22,8 +22,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - Write feature tests for controllers, unit tests for services
 - Every controller/relation change must be covered by a feature test before being marked complete — Phase 1b caught a missing relation this way
 - `PipelineStage` has no `location_id`/`BelongsToLocation` scope of its own (see below) — any code that accepts a `PipelineStage` from outside its own pipeline context must verify tenancy explicitly
+- When manually checking tenant ownership on a `BelongsToLocation`-scoped model resolved from a foreign key (not route-model binding), bypass the model's own global scope explicitly (`withoutGlobalScopes()`) to get the true value for comparison — otherwise the scope may return null for cross-tenant records instead of the real value, breaking the check or throwing instead of cleanly 403ing
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -67,4 +68,13 @@ GitHub: mohit-coded/tech-crm (private), main branch
   `$stage->pipeline->location_id` against the acting user's
   `current_location_id` before using it. `Opportunity::moveToStage()`
   does not currently perform this check itself; it trusts the caller,
-  so this must be enforced at the controller layer once one exists.
+  so this must be enforced at the controller layer.
+- **Kanban stage-move API:** `PATCH /api/opportunities/{opportunity}/stage`
+  (`OpportunityStageController@update`, `auth` middleware) is that
+  controller layer. It validates `pipeline_stage_id` exists, loads the
+  `PipelineStage`, checks the stage's true pipeline `location_id`
+  (via `Pipeline::withoutGlobalScopes()` — see the tenant-ownership
+  convention above) against the acting user's `current_location_id`,
+  aborts 403 on mismatch, then calls `moveToStage()` and returns the
+  fresh opportunity with `stage` loaded as JSON. Covered by
+  `tests/Feature/OpportunityStageControllerTest.php`.
