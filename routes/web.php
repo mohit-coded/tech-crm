@@ -1,17 +1,23 @@
 <?php
 
 use App\Http\Controllers\LocationSwitchController;
-use App\Http\Controllers\OpportunityStageController;
+use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return view('welcome');
 });
 
-Route::post('/locations/switch/{location}', [LocationSwitchController::class, 'switch'])
-    ->middleware('auth')
-    ->name('locations.switch');
+Route::get('/dashboard', function () {
+    return view('dashboard');
+})->middleware(['auth', 'verified'])->name('dashboard');
 
-Route::patch('/api/opportunities/{opportunity}/stage', [OpportunityStageController::class, 'update'])
-    ->middleware('auth')
-    ->name('opportunities.stage.update');
+Route::middleware('auth')->group(function () {
+    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
+    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+
+    Route::post('/locations/switch/{location}', [LocationSwitchController::class, 'switch']);
+});
+
+require __DIR__.'/auth.php';
