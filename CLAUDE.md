@@ -21,8 +21,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - Migrations: one feature per PR, always include down()
 - Write feature tests for controllers, unit tests for services
 - Every controller/relation change must be covered by a feature test before being marked complete — Phase 1b caught a missing relation this way
+- `PipelineStage` has no `location_id`/`BelongsToLocation` scope of its own (see below) — any code that accepts a `PipelineStage` from outside its own pipeline context must verify tenancy explicitly
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -44,38 +45,26 @@ GitHub: mohit-coded/tech-crm (private), main branch
   (`User::locations()` / `Location::users()`), not via
   `current_location_id`. `LocationSwitchController@switch` checks
   pivot membership (403 if none) before updating
-  `current_location_id`.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
-Oh.
-Hey, I'm about to do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I The Kalapuzhya thinnest, which you think I like.
-You are thinnest.
-I am not that.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
-Oh.
-Hey, I'm about to do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I Yaar thinna? Ahmaaa, idan japdiyil.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
-Oh.
-Hey, I'm about to do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I Ah... Ah, ma... Ah, gan japtigul.Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
-Oh.
-Hey, I'm about to do phone call.
-Hey, I'm gonna do phone call.
-Fun, fun, No, no, no, no, oh, watch it, watch it, Oh my God, Arjun, you know what you did? It's all for You Please I'm very serious. Please marry me, baby. We are the first to get I think around now, now, so a lot of people are thinking This I think Yeah, Hey, hey, hey, Shiva.
-Oh.
-Hey, I'm about to do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-Hey, I'm gonna do phone call.
-You Phone, if it I I Bye, Hey, hey, hey, hey, hey, hey, hey, hey. Bye, bye, see you, bye, bye, bye, bye, Hey, Next call, call down. It is number They, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, Oh, go, go, go, go, go, go, Oh, and the wallet, it Oh, and the wallet, they have to do it like this, right I am a I I am a man Yeah, in the... in the... In the air, but I Wallet. It. Oh, and wallet. They have to do it like this, right? I'm, I'm a Bam boom, I don't I Just answer After pasting Mavi, Mavi mavii, La la la la la la la, I I am a I I see that my leg, I need to know my leg, but I am a little bit of a numb leg, but I am a little bit of a numb leg, God.
+  `current_location_id`.
+
+### Opportunities/Pipeline (Phase 2)
+- `pipelines` and `opportunities` are `BelongsToLocation` tenant tables
+  as usual. `Pipeline::stages()` is ordered by `position`.
+- Stage changes on an `Opportunity` must go through
+  `Opportunity::moveToStage(PipelineStage $stage)` — it's the only
+  path that fires `OpportunityStageChanged` (old stage id, new stage
+  id). Don't update `pipeline_stage_id` via raw attribute assignment
+  or mass update elsewhere, or the event won't fire.
+- **PipelineStage tenant-check rule:** `pipeline_stages` has no
+  `location_id` column and `PipelineStage` does not use
+  `BelongsToLocation` — it's only scoped indirectly, via
+  `pipeline_id` → `Pipeline` → `location_id`. That means a
+  `PipelineStage` fetched directly (e.g. route-model-bound from a
+  request) is **not** automatically filtered to the current tenant
+  the way `Contact`/`Pipeline`/`Opportunity` are. Any code that takes
+  a `PipelineStage` from outside its own pipeline's `stages()`
+  relation — controllers especially — must explicitly check
+  `$stage->pipeline->location_id` against the acting user's
+  `current_location_id` before using it. `Opportunity::moveToStage()`
+  does not currently perform this check itself; it trusts the caller,
+  so this must be enforced at the controller layer once one exists.
