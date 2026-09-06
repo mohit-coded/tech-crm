@@ -21,7 +21,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - Migrations: one feature per PR, always include down()
 - Write feature tests for controllers, unit tests for services
 
-## Build order (Currently on Phase 1: Auth + multi-tenancy + Contacts. Not yet started.)
+## Build order (Phase 1a complete: multi-tenancy foundation — locations, contacts, BelongsToLocation scope. Phase 1b (auth wiring) next.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
