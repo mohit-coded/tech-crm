@@ -40,13 +40,20 @@ GitHub: mohit-coded/tech-crm (private), main branch
 ### Multi-location membership (Phase 1b)
 - `location_user` pivot table (user_id, location_id, role) tracks which
   locations a user belongs to and their role there.
-- Registration (`RegisteredUserController@store`) now creates a tenant
-  per signup, not just a user: it takes a required "Business Name"
-  field and, in a single DB transaction, creates the `User`, creates a
-  `Location` named after it, attaches the user to that `Location` via
-  `location_user` with role `owner`, and sets the user's
-  `current_location_id` to it. If any step fails the whole thing rolls
-  back — no orphaned `User` or `Location`. See
+- Registration (`RegisteredUserController@store`) now creates a fully
+  working tenant per signup, not just a bare `Location`: it takes a
+  required "Business Name" field and, in a single DB transaction,
+  creates the `User`, creates a `Location` named after it, attaches
+  the user to that `Location` via `location_user` with role `owner`,
+  sets the user's `current_location_id` to it, then creates a default
+  `Pipeline` (`name: "Main Pipeline"`, `is_default: true`, explicit
+  `location_id` since `Auth::login()` hasn't run yet so
+  `BelongsToLocation`'s auto-fill has nothing to key off) and seeds it
+  with the same 5 ordered stages as `DatabaseSeeder` (New Leads, Hot
+  Leads, Booking Requested, Booking Confirmed, Service(s) Sold) — so a
+  new signup has somewhere to put Opportunities immediately. If any
+  step fails the whole thing rolls back — no orphaned `User`,
+  `Location`, or partial `Pipeline`. See
   `tests/Feature/Auth/RegistrationTest.php`.
 - `users.current_location_id` still represents the user's single
   *currently active* location — that's unchanged and is still what
