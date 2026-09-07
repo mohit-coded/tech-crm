@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\LocationSwitchController;
 use App\Http\Controllers\ProfileController;
@@ -20,6 +21,8 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/locations/switch/{location}', [LocationSwitchController::class, 'switch'])
         ->name('locations.switch');
+
+    Route::resource('contacts', ContactController::class)->except('show');
 });
 
 require __DIR__.'/auth.php';
