@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\Location;
+use App\Models\Pipeline;
 use App\Models\User;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
@@ -53,6 +54,23 @@ class RegisteredUserController extends Controller
             $user->locations()->attach($location->id, ['role' => 'owner']);
 
             $user->update(['current_location_id' => $location->id]);
+
+            $pipeline = Pipeline::create([
+                'location_id' => $location->id,
+                'name' => 'Main Pipeline',
+                'is_default' => true,
+            ]);
+
+            collect([
+                'New Leads',
+                'Hot Leads',
+                'Booking Requested',
+                'Booking Confirmed',
+                'Service(s) Sold',
+            ])->each(fn (string $name, int $position) => $pipeline->stages()->create([
+                'name' => $name,
+                'position' => $position,
+            ]));
 
             return $user;
         });

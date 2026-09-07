@@ -3,6 +3,7 @@
 namespace Tests\Feature\Auth;
 
 use App\Models\Location;
+use App\Models\Pipeline;
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -62,6 +63,16 @@ class RegistrationTest extends TestCase
             'location_id' => $location->id,
             'role' => 'owner',
         ]);
+
+        $pipeline = Pipeline::withoutGlobalScopes()->where('location_id', $location->id)->sole();
+
+        $this->assertSame('Main Pipeline', $pipeline->name);
+        $this->assertTrue($pipeline->is_default);
+
+        $this->assertSame(
+            ['New Leads', 'Hot Leads', 'Booking Requested', 'Booking Confirmed', 'Service(s) Sold'],
+            $pipeline->stages()->orderBy('position')->pluck('name')->all()
+        );
     }
 
     public function test_no_user_is_left_behind_if_location_creation_fails(): void
