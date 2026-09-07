@@ -75,6 +75,33 @@ GitHub: mohit-coded/tech-crm (private), main branch
   `/dashboard`. Covered by
   `tests/Feature/LocationSwitcherNavigationTest.php`.
 
+### Contacts CRUD (Phase 1)
+- `ContactController` (`resources` route, `Route::resource('contacts',
+  ContactController::class)->except('show')`, inside the `auth`
+  middleware group) is complete: index, create, store, edit, update,
+  destroy. `show` is intentionally excluded — nothing links to it and
+  it isn't part of this feature, so the route is left out rather than
+  registered against a method that doesn't exist.
+- Tenant isolation needs no manual `location_id` filtering anywhere in
+  the controller: `index` queries `Contact` directly (the
+  `BelongsToLocation` global scope handles it), and `edit`/`update`/
+  `destroy` rely on implicit route-model binding, which resolves
+  through that same global scope — a cross-tenant contact id simply
+  fails to bind and 404s before the method body runs. `store` also
+  omits `location_id`, relying on `BelongsToLocation`'s `creating()`
+  auto-fill from `Auth::user()->current_location_id`, since (unlike
+  registration) the user is already authenticated at that point.
+- Views live in `resources/views/contacts/` (`index`, `create`,
+  `edit`, shared `_form` partial) and reuse the Breeze card styling
+  from `dashboard.blade.php` and the `x-input-label`/`x-text-input`/
+  `x-input-error`/`x-primary-button` components from the auth views.
+  "Contacts" is linked in the main nav next to "Dashboard"
+  (desktop and mobile).
+- Covered by `tests/Feature/ContactControllerTest.php`: index only
+  lists the acting user's own-location contacts, store scopes via the
+  trait, and edit/update/destroy all 404 (not silently succeed) on a
+  contact from another location.
+
 ### Opportunities/Pipeline (Phase 2)
 - `pipelines` and `opportunities` are `BelongsToLocation` tenant tables
   as usual. `Pipeline::stages()` is ordered by `position`.
