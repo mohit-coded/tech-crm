@@ -17,7 +17,8 @@ Route::middleware('auth')->group(function () {
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
-    Route::post('/locations/switch/{location}', [LocationSwitchController::class, 'switch']);
+    Route::post('/locations/switch/{location}', [LocationSwitchController::class, 'switch'])
+        ->name('locations.switch');
 });
 
 require __DIR__.'/auth.php';
