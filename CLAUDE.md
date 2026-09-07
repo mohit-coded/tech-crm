@@ -26,7 +26,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - `routes/api.php` now exists (created via `php artisan install:api`, after Breeze's auth scaffolding install) and is registered in `bootstrap/app.php`. JSON API endpoints (like the Kanban stage-move route) belong there going forward, not in `routes/web.php` — Breeze owns `web.php` now (dashboard/profile/`auth.php`) and artisan installers regenerate it, so anything custom added there is at risk of being overwritten and needs re-adding, as happened here
 - Rollback/failure-path tests should force a real failure (e.g. dropping a required column mid-test) rather than mocking, where practical — this is how we proved the registration transaction actually rolls back
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -98,3 +98,27 @@ GitHub: mohit-coded/tech-crm (private), main branch
   aborts 403 on mismatch, then calls `moveToStage()` and returns the
   fresh opportunity with `stage` loaded as JSON. Covered by
   `tests/Feature/OpportunityStageControllerTest.php`.
+
+### Dashboard (Phase 8, basic version)
+- `GET /dashboard` (`DashboardController@index`) replaced the old
+  "You're logged in!" placeholder with real data: total open
+  (`status = 'open'`) opportunities count, sum of `monetary_value`
+  for open opportunities (pipeline value), open-opportunity counts
+  grouped by pipeline stage, and the 5 most recently created
+  opportunities (with `contact` and `stage` eager-loaded).
+- No manual `location_id` filtering anywhere in the controller — it
+  relies entirely on `Opportunity`'s existing `BelongsToLocation`
+  global scope, same as every other tenant query.
+- View is `resources/views/dashboard.blade.php`: stat cards for count
+  and pipeline value, a list for the stage breakdown, a list for
+  recent opportunities — reusing the existing Breeze card styling
+  (`bg-white dark:bg-gray-800 ... shadow-sm sm:rounded-lg`) from the
+  rest of the layout.
+- Covered by `tests/Feature/DashboardTest.php`, which is the
+  important test here: it seeds two different locations with their
+  own opportunities and asserts the dashboard for one user's location
+  shows only that location's counts/values/stages/recents — i.e. it
+  verifies the scope actually isolates dashboard data across tenants,
+  not just that the numbers render.
+- Broader reporting (beyond this basic dashboard) is still open under
+  Phase 8.
