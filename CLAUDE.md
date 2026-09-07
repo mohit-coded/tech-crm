@@ -57,6 +57,16 @@ GitHub: mohit-coded/tech-crm (private), main branch
   `current_location_id`. `LocationSwitchController@switch` checks
   pivot membership (403 if none) before updating
   `current_location_id`.
+- **UI-complete:** the location switcher isn't just an API anymore —
+  `resources/views/layouts/navigation.blade.php` has a dropdown next
+  to the user menu (Alpine-driven, via the shared `x-dropdown`
+  component) showing `Auth::user()->currentLocation->name` as the
+  trigger and listing `Auth::user()->locations` with role, greying
+  out the current one and posting the rest to `locations.switch`
+  (named route, still `POST /locations/switch/{location}`). Switching
+  redirects back to the referring page via `back()`, not always to
+  `/dashboard`. Covered by
+  `tests/Feature/LocationSwitcherNavigationTest.php`.
 
 ### Opportunities/Pipeline (Phase 2)
 - `pipelines` and `opportunities` are `BelongsToLocation` tenant tables
