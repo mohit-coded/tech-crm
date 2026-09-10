@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FunnelController;
@@ -29,6 +30,8 @@ Route::middleware('auth')->group(function () {
     Route::resource('contacts', ContactController::class)->except('show');
 
     Route::resource('funnels', FunnelController::class)->except('show');
+
+    Route::resource('calendars', CalendarController::class)->except('show');
 
     Route::get('/opportunities', [OpportunityBoardController::class, 'index'])
         ->name('opportunities.index');
