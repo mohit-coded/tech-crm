@@ -28,8 +28,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - Rollback/failure-path tests should force a real failure (e.g. dropping a required column mid-test) rather than mocking, where practical — this is how we proved the registration transaction actually rolls back
 - **Public/unauthenticated routes and `BelongsToLocation`:** the trait's global scope is inert on these routes, not blocking — there's no `Auth::user()` for it to key off, so a tenant-scoped query with no explicit filter runs fully unscoped across every tenant's rows, not zero rows. This is a different failure mode from the `withoutGlobalScopes()` convention above (which bypasses-and-rechecks a scope that *would* otherwise apply, to get the true value for a comparison) — on a public route there's nothing to bypass, the scope was never going to help, so any tenant-scoped query here needs an explicit `location_id` filter. See `FunnelPublicController@store`, which resolves the funnel via `withoutGlobalScopes()` (correctly — it needs the true row regardless of tenant) but then filters the `Contact`/`Pipeline`/`Opportunity` queries by `$funnel->location_id` explicitly, because none of that scoping happens automatically with no authenticated user.
 - **Factory gotcha:** a factory `definition()` default of `Model::factory()` (a nested factory relation) for a `BelongsToLocation` foreign key defeats the trait's `creating()` auto-fill, because auto-fill only fires when the attribute is genuinely absent — a nested factory always supplies one. `ContactFactory`/`FunnelFactory` deliberately omit `location_id` from their defaults so auto-fill works in tests that rely on it; `OpportunityFactory`/`PipelineFactory` don't, so tests using those must explicitly pass `'location_id' => null` to opt back into auto-fill (see the pattern in `OpportunityTest`).
+- **Resolving a child model with no `location_id` of its own** (like `PipelineStage`, `AvailabilityRule`): prefer looking it up through its already-tenant-verified parent's relation — `$parent->children()->find($id)`, e.g. `$calendar->availabilityRules()->find($ruleId)` — over a bare `Model::find($id)`. This achieves the same tenant safety as the `withoutGlobalScopes()`-then-compare check documented above, more simply, whenever the parent relation itself is the natural scoping boundary: a foreign/stale child id just won't be found through the wrong parent's relation and is silently excluded, with no separate comparison step needed. Reach for the explicit `withoutGlobalScopes()`-then-compare form instead when there's no such parent relation to scope through (e.g. `OpportunityStageController` needs the `PipelineStage`'s pipeline location compared against the acting user directly, since it isn't resolving through an already-verified parent).
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 foundational: Calendars + Availability Rules (admin only, no public booking page yet — see below). Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -177,6 +178,54 @@ GitHub: mohit-coded/tech-crm (private), main branch
   submission creates exactly one `Contact` and `Opportunity` scoped
   to the funnel's own location; submitting funnel A's form never
   creates data in funnel B's location).
+
+### Calendars + Availability Rules (Phase 4, foundational)
+- Admin-only foundation for scheduling — no public booking page yet,
+  just the `Calendar` and `AvailabilityRule` data model and an admin
+  CRUD to manage them. `calendars` (`location_id`, `name`,
+  `duration_minutes` default 30, nullable `timezone`, `is_active`
+  default true) is a normal `BelongsToLocation` tenant table.
+  `availability_rules` (`calendar_id` FK cascadeOnDelete,
+  `day_of_week` 0-6, `start_time`, `end_time`) has no `location_id` of
+  its own — same situation as `PipelineStage`, scoped only indirectly
+  via `calendar_id` → `Calendar` → `location_id`. `Calendar hasMany
+  AvailabilityRule` (`availabilityRules()`, ordered by day then start
+  time); `AvailabilityRule belongsTo Calendar`.
+- `CalendarController` (`Route::resource('calendars',
+  CalendarController::class)->except('show')`, inside the `auth`
+  middleware group) is the admin CRUD: index, create, store, edit,
+  update, destroy. Same shape and tenant-isolation reasoning as
+  Contacts/Funnels CRUD — route-model binding through `Calendar`'s
+  `BelongsToLocation` scope, `store` relies on the trait's
+  `creating()` auto-fill.
+- **Availability rules are managed inline on the calendar edit page,
+  not via separate endpoints** — chosen over AJAX/mini-endpoints as
+  the simplest correct option for a foundational, no-JS-required
+  feature: one `<form>` on `calendars/edit.blade.php` submits the
+  calendar fields together with the rules in a single `PUT
+  /calendars/{calendar}` request. Existing rules render as rows keyed
+  by rule id (`rules[{id}][day_of_week|start_time|end_time|remove]`)
+  with a "Remove" checkbox; a fixed 3 blank `new_rules[i][...]` rows
+  below them are silently skipped if left empty. Adding more than 3
+  rules in one sitting means saving and reopening the edit page for
+  another batch — an accepted limitation at this stage.
+  `CalendarController::syncAvailabilityRules()` applies all of it
+  (update/remove/create) in one pass after the calendar itself saves.
+- **This is the model case for the new "resolve through the parent
+  relation" convention above:** existing rule rows are looked up via
+  `$calendar->availabilityRules()->find($ruleId)`, not
+  `AvailabilityRule::find($ruleId)` — since `$calendar` is already
+  route-model-bound and tenant-verified, a rule id belonging to
+  another calendar (same tenant or a different one) simply isn't
+  found through that relation and is silently skipped, never updated
+  or deleted.
+- Covered by `tests/Feature/CalendarControllerTest.php`: index/store
+  isolation and edit/update/destroy 404s, same shape as
+  `FunnelControllerTest`/`ContactControllerTest`, plus rule-specific
+  cases — adding a rule, removing a rule, and (the important one)
+  submitting another location's rule id through your own calendar's
+  update, asserting it's left completely untouched rather than
+  modified or deleted.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
