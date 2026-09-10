@@ -23,7 +23,8 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - Every controller/relation change must be covered by a feature test before being marked complete — Phase 1b caught a missing relation this way
 - `PipelineStage` has no `location_id`/`BelongsToLocation` scope of its own (see below) — any code that accepts a `PipelineStage` from outside its own pipeline context must verify tenancy explicitly
 - When manually checking tenant ownership on a `BelongsToLocation`-scoped model resolved from a foreign key (not route-model binding), bypass the model's own global scope explicitly (`withoutGlobalScopes()`) to get the true value for comparison — otherwise the scope may return null for cross-tenant records instead of the real value, breaking the check or throwing instead of cleanly 403ing
-- `routes/api.php` now exists (created via `php artisan install:api`, after Breeze's auth scaffolding install) and is registered in `bootstrap/app.php`. JSON API endpoints (like the Kanban stage-move route) belong there going forward, not in `routes/web.php` — Breeze owns `web.php` now (dashboard/profile/`auth.php`) and artisan installers regenerate it, so anything custom added there is at risk of being overwritten and needs re-adding, as happened here
+- `routes/api.php` now exists (created via `php artisan install:api`, after Breeze's auth scaffolding install) and is registered in `bootstrap/app.php`. Breeze owns `web.php` now (dashboard/profile/`auth.php`) and artisan installers regenerate it, so anything custom added there is at risk of being overwritten and needs re-adding, as happened once before — but that's about *file ownership*, not where a route belongs; see the next bullet for the actual routing rule
+- **Routing convention — `web.php` vs `api.php`:** any endpoint called via `fetch()`/XHR from our own Blade views (session-authenticated JS running on our own authenticated pages, same-origin) belongs in `routes/web.php`, inside the `auth` middleware group, not in `routes/api.php`. `api.php`'s routes are stateless by design (no session middleware, no CSRF) — that's for token-authenticated external API consumers, which this project doesn't have yet. The Kanban stage-move route (`PATCH /api/opportunities/{opportunity}/stage`) was originally placed in `api.php` and looked fine in feature tests, but a real browser `fetch()` got 401 there because the session cookie is never recognized without the `web` middleware group's session/cookie middleware — it now lives in `web.php` (same URL path, just routed differently; the `/api/...` prefix is cosmetic, not a statement about which routes file it's in). **Gotcha:** this class of bug is invisible to `actingAs()`-based feature tests — `actingAs()` sets the authenticated user directly on the app instance and bypasses the HTTP middleware pipeline entirely, so a route in the wrong middleware group still "passes" in tests while failing for a real browser. There's no automated coverage for this; it has to be caught by reasoning about which middleware group a route needs, or by testing with real HTTP requests (not `actingAs()`)
 - Rollback/failure-path tests should force a real failure (e.g. dropping a required column mid-test) rather than mocking, where practical — this is how we proved the registration transaction actually rolls back
 
 ## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
@@ -131,7 +132,15 @@ GitHub: mohit-coded/tech-crm (private), main branch
   convention above) against the acting user's `current_location_id`,
   aborts 403 on mismatch, then calls `moveToStage()` and returns the
   fresh opportunity with `stage` loaded as JSON. Covered by
-  `tests/Feature/OpportunityStageControllerTest.php`.
+  `tests/Feature/OpportunityStageControllerTest.php`. Registered in
+  `routes/web.php` (not `api.php`) — see the routing convention above;
+  it's called via same-origin `fetch()` from
+  `resources/views/opportunities/board.blade.php` with a session
+  cookie and the `X-CSRF-TOKEN` header read from the `csrf-token`
+  meta tag, so it needs the `web` middleware group's session/CSRF
+  handling. The URL path keeps its `/api/...` prefix for historical
+  reasons even though it's not in `api.php` — the prefix is just part
+  of the path string, not a routing-file indicator.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old

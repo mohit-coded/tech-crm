@@ -4,6 +4,7 @@ use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\LocationSwitchController;
 use App\Http\Controllers\OpportunityBoardController;
+use App\Http\Controllers\OpportunityStageController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
@@ -27,6 +28,10 @@ Route::middleware('auth')->group(function () {
 
     Route::get('/opportunities', [OpportunityBoardController::class, 'index'])
         ->name('opportunities.index');
+
+    // Same-origin fetch() from board.blade.php, session-authenticated —
+    // belongs here, not in api.php (see CLAUDE.md routing convention).
+    Route::patch('/api/opportunities/{opportunity}/stage', [OpportunityStageController::class, 'update']);
 });
 
 require __DIR__.'/auth.php';
