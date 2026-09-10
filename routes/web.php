@@ -3,6 +3,7 @@
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\LocationSwitchController;
+use App\Http\Controllers\OpportunityBoardController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
 
@@ -23,6 +24,9 @@ Route::middleware('auth')->group(function () {
         ->name('locations.switch');
 
     Route::resource('contacts', ContactController::class)->except('show');
+
+    Route::get('/opportunities', [OpportunityBoardController::class, 'index'])
+        ->name('opportunities.index');
 });
 
 require __DIR__.'/auth.php';
