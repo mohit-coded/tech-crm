@@ -41,4 +41,9 @@ class Calendar extends Model
     {
         return $this->hasMany(AvailabilityRule::class)->orderBy('day_of_week')->orderBy('start_time');
     }
+
+    public function appointments(): HasMany
+    {
+        return $this->hasMany(Appointment::class);
+    }
 }
