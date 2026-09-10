@@ -26,8 +26,10 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - `routes/api.php` now exists (created via `php artisan install:api`, after Breeze's auth scaffolding install) and is registered in `bootstrap/app.php`. Breeze owns `web.php` now (dashboard/profile/`auth.php`) and artisan installers regenerate it, so anything custom added there is at risk of being overwritten and needs re-adding, as happened once before — but that's about *file ownership*, not where a route belongs; see the next bullet for the actual routing rule
 - **Routing convention — `web.php` vs `api.php`:** any endpoint called via `fetch()`/XHR from our own Blade views (session-authenticated JS running on our own authenticated pages, same-origin) belongs in `routes/web.php`, inside the `auth` middleware group, not in `routes/api.php`. `api.php`'s routes are stateless by design (no session middleware, no CSRF) — that's for token-authenticated external API consumers, which this project doesn't have yet. The Kanban stage-move route (`PATCH /api/opportunities/{opportunity}/stage`) was originally placed in `api.php` and looked fine in feature tests, but a real browser `fetch()` got 401 there because the session cookie is never recognized without the `web` middleware group's session/cookie middleware — it now lives in `web.php` (same URL path, just routed differently; the `/api/...` prefix is cosmetic, not a statement about which routes file it's in). **Gotcha:** this class of bug is invisible to `actingAs()`-based feature tests — `actingAs()` sets the authenticated user directly on the app instance and bypasses the HTTP middleware pipeline entirely, so a route in the wrong middleware group still "passes" in tests while failing for a real browser. There's no automated coverage for this; it has to be caught by reasoning about which middleware group a route needs, or by testing with real HTTP requests (not `actingAs()`)
 - Rollback/failure-path tests should force a real failure (e.g. dropping a required column mid-test) rather than mocking, where practical — this is how we proved the registration transaction actually rolls back
+- **Public/unauthenticated routes and `BelongsToLocation`:** the trait's global scope is inert on these routes, not blocking — there's no `Auth::user()` for it to key off, so a tenant-scoped query with no explicit filter runs fully unscoped across every tenant's rows, not zero rows. This is a different failure mode from the `withoutGlobalScopes()` convention above (which bypasses-and-rechecks a scope that *would* otherwise apply, to get the true value for a comparison) — on a public route there's nothing to bypass, the scope was never going to help, so any tenant-scoped query here needs an explicit `location_id` filter. See `FunnelPublicController@store`, which resolves the funnel via `withoutGlobalScopes()` (correctly — it needs the true row regardless of tenant) but then filters the `Contact`/`Pipeline`/`Opportunity` queries by `$funnel->location_id` explicitly, because none of that scoping happens automatically with no authenticated user.
+- **Factory gotcha:** a factory `definition()` default of `Model::factory()` (a nested factory relation) for a `BelongsToLocation` foreign key defeats the trait's `creating()` auto-fill, because auto-fill only fires when the attribute is genuinely absent — a nested factory always supplies one. `ContactFactory`/`FunnelFactory` deliberately omit `location_id` from their defaults so auto-fill works in tests that rely on it; `OpportunityFactory`/`PipelineFactory` don't, so tests using those must explicitly pass `'location_id' => null` to opt back into auto-fill (see the pattern in `OpportunityTest`).
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -141,6 +143,40 @@ GitHub: mohit-coded/tech-crm (private), main branch
   handling. The URL path keeps its `/api/...` prefix for historical
   reasons even though it's not in `api.php` — the prefix is just part
   of the path string, not a routing-file indicator.
+
+### Funnels (Phase 3)
+- `FunnelController` (`Route::resource('funnels',
+  FunnelController::class)->except('show')`, inside the `auth`
+  middleware group) is the admin CRUD: index, create, store, edit,
+  update, destroy. Same shape and same tenant-isolation reasoning as
+  Contacts CRUD — route-model binding runs through `Funnel`'s
+  `BelongsToLocation` scope, and `store` relies on the trait's
+  `creating()` auto-fill rather than setting `location_id` manually.
+  `slug` is validated unique and `alpha_dash`, ignoring the funnel's
+  own row on update.
+- Public lead capture is genuinely unauthenticated: `GET /f/{slug}`
+  (`funnels.public.show`) and `POST /f/{slug}/submit`
+  (`funnels.public.submit`), both in `FunnelPublicController`, live
+  outside the `auth` middleware group entirely.
+- **This is where the public-route scoping convention above actually
+  bites.** `FunnelPublicController::publishedFunnel()` resolves the
+  funnel via `Funnel::withoutGlobalScopes()->where('slug',
+  ...)->where('is_published', true)->firstOrFail()` — bypassing the
+  scope because there's no `Auth::user()` for it to key off anyway —
+  and 404s equally for an unpublished or a nonexistent slug, so a
+  slug's existence is never leaked either way. From there, the new
+  `Contact` and the `Opportunity` it creates both set `location_id`
+  explicitly from `$funnel->location_id`, and the `Pipeline` lookup
+  (the location's default pipeline, falling back to its first
+  pipeline) is filtered by `location_id` explicitly too — none of
+  that scoping is automatic on this route.
+- Covered by `tests/Feature/FunnelControllerTest.php` (admin CRUD
+  tenant isolation, same shape as `ContactControllerTest`) and
+  `tests/Feature/FunnelPublicControllerTest.php` (published vs.
+  unpublished vs. nonexistent slugs all resolve correctly; a
+  submission creates exactly one `Contact` and `Opportunity` scoped
+  to the funnel's own location; submitting funnel A's form never
+  creates data in funnel B's location).
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
