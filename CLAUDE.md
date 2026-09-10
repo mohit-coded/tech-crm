@@ -226,6 +226,49 @@ GitHub: mohit-coded/tech-crm (private), main branch
   submitting another location's rule id through your own calendar's
   update, asserting it's left completely untouched rather than
   modified or deleted.
+- **`AvailabilitySlotCalculator` (data layer, no UI/controller yet):**
+  `app/Services/AvailabilitySlotCalculator.php`'s
+  `getAvailableSlots(Calendar $calendar, Carbon $date): array`
+  computes bookable slots for a calendar day — matches
+  `AvailabilityRule`s for that day-of-week, generates candidate slots
+  at `duration_minutes` intervals (never one that would extend past
+  `end_time`), excludes slots overlapping a non-cancelled
+  `Appointment` via proper interval overlap (not exact-match), and
+  excludes already-past slots when the date is today. All math runs
+  in the resolved timezone (calendar → location → UTC fallback chain
+  — the final `?? 'UTC'` is defensive: `locations.timezone` is `NOT
+  NULL DEFAULT 'UTC'` and `calendars.location_id` is required, so
+  that branch can't actually be reached today, only guarded against).
+  This introduced the `appointments` table (`location_id`,
+  `calendar_id`, `contact_id`, UTC `starts_at`/`ends_at`, `status`
+  enum `booked`/`cancelled`) purely as a data dependency — no
+  controller, routes, or views for it yet.
+- **Known performance trade-off, left as-is for this foundational
+  pass:** `AvailabilitySlotCalculator::bookedIntervals()` fetches
+  *all* of a calendar's non-cancelled appointments rather than
+  filtering by a date range around the requested day, then does the
+  overlap check in PHP. Correctness was prioritized over query
+  scope/precision here — date-range filtering across a stored-UTC
+  column against a local calendar day has timezone-boundary edge
+  cases that are easy to get subtly wrong, and appointment volume per
+  calendar is expected to stay small at this stage. Flagged as the
+  place to add a `whereBetween('starts_at', [...])` (bounded a day on
+  each side of the local date, in UTC, to stay correct across any
+  offset) once a calendar's appointment history grows enough for this
+  to matter.
+- Covered by `tests/Unit/AvailabilitySlotCalculatorTest.php` — no
+  HTTP, no controllers (uses `Tests\TestCase` + `RefreshDatabase` only
+  because the service reads real Eloquent relations). Cases: a single
+  rule with no appointments; multiple rules on the same day producing
+  correctly separated slot groups; an existing appointment excluding
+  only the slots it overlaps (plus proving a *cancelled* appointment
+  doesn't block); a partial, non-boundary-aligned overlap still
+  excluded; the last slot that exactly fits a window included; a slot
+  that would extend past `end_time` never generated; today's date
+  with past slots excluded and future ones kept; a day with no
+  matching rules returning `[]`; a DST spring-forward day still
+  bounding slots to the rule's local start/end times; and the
+  calendar → location timezone fallback.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
