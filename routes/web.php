@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FunnelController;
+use App\Http\Controllers\FunnelPublicController;
 use App\Http\Controllers\LocationSwitchController;
 use App\Http\Controllers\OpportunityBoardController;
 use App\Http\Controllers\OpportunityStageController;
@@ -26,6 +28,8 @@ Route::middleware('auth')->group(function () {
 
     Route::resource('contacts', ContactController::class)->except('show');
 
+    Route::resource('funnels', FunnelController::class)->except('show');
+
     Route::get('/opportunities', [OpportunityBoardController::class, 'index'])
         ->name('opportunities.index');
 
@@ -33,5 +37,12 @@ Route::middleware('auth')->group(function () {
     // belongs here, not in api.php (see CLAUDE.md routing convention).
     Route::patch('/api/opportunities/{opportunity}/stage', [OpportunityStageController::class, 'update']);
 });
+
+// Public funnel pages — anonymous visitors, deliberately outside the
+// 'auth' group. FunnelPublicController resolves tenancy explicitly via
+// the funnel's location_id rather than relying on BelongsToLocation's
+// scope, which is inert with no authenticated user.
+Route::get('/f/{slug}', [FunnelPublicController::class, 'show'])->name('funnels.public.show');
+Route::post('/f/{slug}/submit', [FunnelPublicController::class, 'store'])->name('funnels.public.submit');
 
 require __DIR__.'/auth.php';
