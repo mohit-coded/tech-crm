@@ -47,5 +47,8 @@ Route::middleware('auth')->group(function () {
 // scope, which is inert with no authenticated user.
 Route::get('/f/{slug}', [FunnelPublicController::class, 'show'])->name('funnels.public.show');
 Route::post('/f/{slug}/submit', [FunnelPublicController::class, 'store'])->name('funnels.public.submit');
+Route::get('/f/{slug}/book', [FunnelPublicController::class, 'book'])->name('funnels.public.book');
+Route::post('/f/{slug}/book/confirm', [FunnelPublicController::class, 'confirmBooking'])->name('funnels.public.book.confirm');
+Route::get('/f/{slug}/book/confirmed', [FunnelPublicController::class, 'bookingConfirmed'])->name('funnels.public.book.confirmed');
 
 require __DIR__.'/auth.php';
