@@ -30,6 +30,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Factory gotcha:** a factory `definition()` default of `Model::factory()` (a nested factory relation) for a `BelongsToLocation` foreign key defeats the trait's `creating()` auto-fill, because auto-fill only fires when the attribute is genuinely absent — a nested factory always supplies one. `ContactFactory`/`FunnelFactory` deliberately omit `location_id` from their defaults so auto-fill works in tests that rely on it; `OpportunityFactory`/`PipelineFactory` don't, so tests using those must explicitly pass `'location_id' => null` to opt back into auto-fill (see the pattern in `OpportunityTest`).
 - **Resolving a child model with no `location_id` of its own** (like `PipelineStage`, `AvailabilityRule`): prefer looking it up through its already-tenant-verified parent's relation — `$parent->children()->find($id)`, e.g. `$calendar->availabilityRules()->find($ruleId)` — over a bare `Model::find($id)`. This achieves the same tenant safety as the `withoutGlobalScopes()`-then-compare check documented above, more simply, whenever the parent relation itself is the natural scoping boundary: a foreign/stale child id just won't be found through the wrong parent's relation and is silently excluded, with no separate comparison step needed. Reach for the explicit `withoutGlobalScopes()`-then-compare form instead when there's no such parent relation to scope through (e.g. `OpportunityStageController` needs the `PipelineStage`'s pipeline location compared against the acting user directly, since it isn't resolving through an already-verified parent).
 - **`exists`/`unique` validation rules are not Eloquent-aware:** they query the referenced table directly, completely bypassing `BelongsToLocation`'s global scope. This is a distinct risk from the `withoutGlobalScopes()`/parent-relation conventions above — those are both about *query resolution* (fetching a model instance); this is about *validation*, where there's no model instance or query-builder scope involved at all, just a raw existence check against the table. A plain `'exists:calendars,id'` (or `Rule::exists('calendars', 'id')` with no constraint) on a tenant-scoped foreign key like `calendar_id` or `pipeline_id` will happily validate an id belonging to a *different* tenant as legitimate. Any `exists` rule referencing a `BelongsToLocation`-scoped foreign key must constrain it explicitly: `Rule::exists('calendars', 'id')->where(fn ($q) => $q->where('location_id', Auth::user()->current_location_id))`. See `FunnelController::validated()`'s `calendar_id` rule.
+- **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 
 ## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
@@ -307,16 +308,24 @@ GitHub: mohit-coded/tech-crm (private), main branch
   round-trip per date pick is an accepted v1 trade-off here, same
   "simplest correct option" reasoning as the inline availability-rules
   form on the calendar edit page.
-- **Carrying the lead's `Contact` through to booking — fresh lookup by
-  email, not session state or a client-supplied id:** `confirmBooking`
-  finds-or-creates a `Contact` by `(location_id, email)`, both supplied
-  by the controller itself, not the request. Rejected alternatives:
-  session state doesn't survive the visitor leaving and coming back to
-  book later; a hidden `contact_id` field would need the exact same
-  re-verification work as this lookup anyway, for no benefit. This is
-  naturally tenant-safe for the same reason the `exists`-rule
-  convention above calls out — nothing here is ever trusted from the
-  request.
+- **Carrying the lead's `Contact` through to booking — session-linked,
+  re-verified, with a case-insensitive email fallback (updated after an
+  initial version of this that only did a fresh email lookup — see the
+  bug writeup below):** `store()` stashes the just-created `Contact`'s
+  id in the session, scoped by funnel slug —
+  `session(["funnel_contact_id.{$funnel->slug}" => $contact->id])` —
+  so a visitor with two different funnel submissions active in one
+  session doesn't collide. `sessionContactFor()` reads that value and
+  re-verifies it against the *current* funnel's `location_id` before
+  ever returning it (see the new session-data convention above).
+  `book()` uses it to pre-fill the name/email/phone fields (still
+  editable) instead of making the visitor retype everything.
+  `confirmBooking()` uses the re-verified session `Contact` directly
+  when present — sidestepping email matching entirely — and only falls
+  back to a fresh lookup, matched case-insensitively
+  (`whereRaw('LOWER(email) = ?', [strtolower($email)])`), for a
+  visitor with no session link at all (e.g. a shared/bookmarked link
+  straight to `/f/{slug}/book`).
 - **The critical race-condition guard:** `confirmBooking()` re-runs
   `AvailabilitySlotCalculator` for the submitted date immediately
   before booking (not trusting whatever was shown when the page
@@ -361,9 +370,16 @@ GitHub: mohit-coded/tech-crm (private), main branch
   `Contact`/`Opportunity`; **the double-booking race test** — load the
   page, create a conflicting `Appointment` in between, then submit the
   now-stale selection and assert it's rejected with nothing created;
-  and a cross-tenant `calendar_id`/`location_id` submitted in the
-  request body being silently ignored, with the resulting appointment
-  still pointing at the funnel's own tenant.
+  a cross-tenant `calendar_id`/`location_id` submitted in the request
+  body being silently ignored, with the resulting appointment still
+  pointing at the funnel's own tenant; the email-casing regression
+  (submit as `Test@Example.com`, book as `test@example.com`, exactly
+  one `Contact`, appointment's `contact_id` matches the Opportunity's);
+  the same case-insensitive match with no session link at all (proves
+  the `whereRaw` fallback directly); the booking page pre-filling
+  name/email/phone from the same-session submission; and a session
+  value from funnel A's location planted under funnel B's own session
+  key being ignored rather than honored (the re-verification test).
 - **Thank-you-page link to booking is complete:** the original lead
   capture flow (`funnels/public.blade.php`'s `session('submitted')`
   state) had no way to reach `/f/{slug}/book` at all — fixed by adding
@@ -376,6 +392,22 @@ GitHub: mohit-coded/tech-crm (private), main branch
   thank-you-page flow rather than injecting session state directly:
   the link appears when the funnel has a calendar, and is absent when
   it doesn't.
+- **Bug: case-sensitive email matching silently orphaned bookings from
+  their lead.** Manual testing found that submitting a lead as
+  "Test1@gmail.com" and then booking as "test1@gmail.com" created a
+  *second*, unlinked `Contact` — because `confirmBooking()`'s original
+  `Contact` lookup was a plain `where('email', $email)`, and email
+  addresses aren't case-sensitive but that comparison was. The
+  Opportunity stage-move to "Booking Requested" then silently never
+  ran, since it's keyed off the *original* contact's `contact_id`,
+  which the appointment was never attached to. Root cause wasn't
+  really "the lookup should be case-insensitive" (though it should be,
+  and now is — see above) — it was that the booking form made a human
+  retype an email at all, which is exactly where casing/typo drift
+  comes from. The actual fix is the session-carry-through described
+  above; the case-insensitive `whereRaw` is the secondary hardening for
+  visitors who never went through the lead form in this session to
+  begin with.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
