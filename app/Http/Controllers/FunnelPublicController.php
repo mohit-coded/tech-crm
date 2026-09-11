@@ -33,7 +33,7 @@ class FunnelPublicController extends Controller
             'phone' => ['required', 'string', 'max:255'],
         ]);
 
-        DB::transaction(function () use ($validated, $funnel) {
+        $contact = DB::transaction(function () use ($validated, $funnel) {
             // No authenticated user on a public route, so BelongsToLocation's
             // creating() auto-fill has nothing to key off — location_id must
             // be set explicitly here, same reasoning as registration's
@@ -67,7 +67,17 @@ class FunnelPublicController extends Controller
                 'status' => 'open',
                 'source' => $funnel->name,
             ]);
+
+            return $contact;
         });
+
+        // Remembered so book(), if the visitor proceeds to booking next,
+        // can pre-fill name/email/phone instead of making them retype it —
+        // which is also where the casing/typo drift that used to cause a
+        // duplicate Contact (see sessionContactFor()) actually came from.
+        // Scoped by funnel slug in case a visitor has two different funnel
+        // submissions active in the same session.
+        session(["funnel_contact_id.{$funnel->slug}" => $contact->id]);
 
         return redirect()->route('funnels.public.show', $funnel->slug)->with('submitted', true);
     }
@@ -102,6 +112,7 @@ class FunnelPublicController extends Controller
             'funnel' => $funnel,
             'date' => $date,
             'slots' => $slots,
+            'prefillContact' => $this->sessionContactFor($funnel),
         ]);
     }
 
@@ -148,30 +159,52 @@ class FunnelPublicController extends Controller
         $startsAt = $matchingSlot['start']->clone()->setTimezone('UTC');
         $endsAt = $matchingSlot['end']->clone()->setTimezone('UTC');
 
-        DB::transaction(function () use ($validated, $funnel, $startsAt, $endsAt) {
-            // Fresh lookup by email (scoped to the funnel's own location)
-            // rather than trusting a client-supplied contact id (which
-            // would need the same re-verification effort anyway) or
-            // session state (which wouldn't survive the visitor leaving
-            // and coming back to book later) — this is simplest-correct
-            // and naturally tenant-safe, since we supply location_id
-            // ourselves rather than accepting it from the request.
-            $contact = Contact::where('location_id', $funnel->location_id)
-                ->where('email', $validated['email'])
-                ->first();
+        // Re-verified (inside sessionContactFor()) to actually belong to
+        // this funnel's own location before we ever trust it — a session
+        // value alone is never sufficient proof of tenancy.
+        $sessionContact = $this->sessionContactFor($funnel);
 
-            if ($contact) {
+        DB::transaction(function () use ($validated, $funnel, $startsAt, $endsAt, $sessionContact) {
+            if ($sessionContact) {
+                // The visitor came from this funnel's own lead form
+                // (store() stashed this id) — use that Contact directly
+                // rather than re-doing an email lookup at all. This is
+                // both simpler and fully sidesteps the case/typo-drift
+                // matching problem a human retyping their email can
+                // cause; the fields are still editable, so update() here
+                // captures any correction (or a booking made for someone
+                // else) without creating a second Contact.
+                $contact = $sessionContact;
                 $contact->update([
-                    'first_name' => $validated['name'],
-                    'phone' => $validated['phone'],
-                ]);
-            } else {
-                $contact = Contact::create([
-                    'location_id' => $funnel->location_id,
                     'first_name' => $validated['name'],
                     'email' => $validated['email'],
                     'phone' => $validated['phone'],
                 ]);
+            } else {
+                // No session-linked contact — e.g. a visitor landed here
+                // directly via a shared/bookmarked booking link without
+                // going through the lead form first. Fall back to a
+                // fresh lookup, matched case-insensitively: email
+                // addresses aren't case-sensitive, and a human retyping
+                // one (rather than it being carried through automatically
+                // above) is exactly where casing drift happens.
+                $contact = Contact::where('location_id', $funnel->location_id)
+                    ->whereRaw('LOWER(email) = ?', [strtolower($validated['email'])])
+                    ->first();
+
+                if ($contact) {
+                    $contact->update([
+                        'first_name' => $validated['name'],
+                        'phone' => $validated['phone'],
+                    ]);
+                } else {
+                    $contact = Contact::create([
+                        'location_id' => $funnel->location_id,
+                        'first_name' => $validated['name'],
+                        'email' => $validated['email'],
+                        'phone' => $validated['phone'],
+                    ]);
+                }
             }
 
             Appointment::create([
@@ -214,6 +247,27 @@ class FunnelPublicController extends Controller
         $funnel = $this->publishedFunnel($slug);
 
         return view('funnels.book-confirmed', ['funnel' => $funnel]);
+    }
+
+    /**
+     * The Contact created by this funnel's own store() submission earlier
+     * in this session, if one exists — re-verified against this funnel's
+     * own location_id before ever being trusted for anything, since a
+     * session value on its own is never sufficient proof of tenancy (the
+     * same visitor's session could plausibly hold a contact id from a
+     * different funnel/location's submission).
+     */
+    private function sessionContactFor(Funnel $funnel): ?Contact
+    {
+        $contactId = session("funnel_contact_id.{$funnel->slug}");
+
+        if (! $contactId) {
+            return null;
+        }
+
+        return Contact::where('location_id', $funnel->location_id)
+            ->where('id', $contactId)
+            ->first();
     }
 
     /**

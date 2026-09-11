@@ -257,4 +257,186 @@ class FunnelBookingTest extends TestCase
         $this->assertSame($calendarA->id, $appointment->calendar_id);
         $this->assertNotSame($calendarB->id, $appointment->calendar_id);
     }
+
+    // Regression test for the original bug: a visitor submits the lead
+    // form, then books with their email typed differently (casing drift
+    // is exactly what a human retyping causes) — this must still resolve
+    // to the SAME Contact (via the session-linked id, not an email
+    // lookup at all), not silently create a second, unlinked one.
+    public function test_submitting_and_then_booking_with_different_email_casing_reuses_the_same_contact(): void
+    {
+        [$location, $calendar] = $this->makeLocationWithCalendar();
+
+        // store() needs a Pipeline to receive the lead into — without one
+        // it aborts (500) and rolls back, so nothing would ever get
+        // created for this test to observe.
+        $pipeline = Pipeline::factory()->create(['location_id' => $location->id, 'is_default' => true]);
+        $pipeline->stages()->create(['name' => 'New Leads', 'position' => 0]);
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => $calendar->id,
+            'slug' => 'book-test',
+            'is_published' => true,
+        ]);
+
+        $this->post('/f/book-test/submit', [
+            'name' => 'Jane Doe',
+            'email' => 'Test@Example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $opportunity = Opportunity::withoutGlobalScopes()->sole();
+
+        // Visitor ignores the pre-filled value and retypes their email
+        // with different casing anyway.
+        $response = $this->post('/f/book-test/book/confirm', [
+            'date' => $this->bookingDate()->format('Y-m-d'),
+            'start_time' => '09:00',
+            'name' => 'Jane Doe',
+            'email' => 'test@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response->assertRedirect(route('funnels.public.book.confirmed', 'book-test'));
+
+        $this->assertSame(1, Contact::withoutGlobalScopes()->count());
+
+        $appointment = Appointment::withoutGlobalScopes()->sole();
+        $this->assertSame($opportunity->contact_id, $appointment->contact_id);
+    }
+
+    // Same underlying bug, but for a visitor with no session-linked
+    // contact at all (e.g. a shared/bookmarked link straight to the
+    // booking page) — this is what actually exercises the
+    // whereRaw('LOWER(email) = ?') fallback lookup directly.
+    public function test_confirming_without_a_session_contact_still_matches_an_existing_contact_case_insensitively(): void
+    {
+        [$location, $calendar] = $this->makeLocationWithCalendar();
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => $calendar->id,
+            'slug' => 'book-test',
+            'is_published' => true,
+        ]);
+
+        $existingContact = Contact::factory()->create([
+            'location_id' => $location->id,
+            'email' => 'Test@Example.com',
+        ]);
+
+        // No prior /submit in this test — no funnel_contact_id session
+        // value exists, so this must fall back to the case-insensitive
+        // email lookup rather than creating a duplicate.
+        $response = $this->post('/f/book-test/book/confirm', [
+            'date' => $this->bookingDate()->format('Y-m-d'),
+            'start_time' => '09:00',
+            'name' => 'Jane Doe',
+            'email' => 'test@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response->assertRedirect(route('funnels.public.book.confirmed', 'book-test'));
+
+        $this->assertSame(1, Contact::withoutGlobalScopes()->count());
+
+        $appointment = Appointment::withoutGlobalScopes()->sole();
+        $this->assertSame($existingContact->id, $appointment->contact_id);
+    }
+
+    public function test_booking_page_prefills_name_email_phone_from_the_just_submitted_lead(): void
+    {
+        [$location, $calendar] = $this->makeLocationWithCalendar();
+
+        // store() needs a Pipeline to receive the lead into — without one
+        // it aborts (500) and rolls back, so the session id would never
+        // get set for book() to pick up.
+        $pipeline = Pipeline::factory()->create(['location_id' => $location->id, 'is_default' => true]);
+        $pipeline->stages()->create(['name' => 'New Leads', 'position' => 0]);
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => $calendar->id,
+            'slug' => 'book-test',
+            'is_published' => true,
+        ]);
+
+        $this->post('/f/book-test/submit', [
+            'name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response = $this->get('/f/book-test/book?date='.$this->bookingDate()->format('Y-m-d'));
+
+        $response->assertOk();
+        $response->assertSee('Jane Doe');
+        $response->assertSee('jane@example.com');
+        $response->assertSee('555-1234');
+    }
+
+    // Cross-tenant: a funnel_contact_id present in the session under a
+    // DIFFERENT funnel's own key must never be honored for booking
+    // through this funnel if it points at a contact from another
+    // location — proves sessionContactFor()'s location_id re-check
+    // actually runs, rather than the session value being trusted blindly.
+    public function test_session_contact_from_another_locations_funnel_is_not_honored(): void
+    {
+        [$locationA, $calendarA] = $this->makeLocationWithCalendar();
+        [$locationB, $calendarB] = $this->makeLocationWithCalendar();
+
+        Funnel::factory()->create([
+            'location_id' => $locationA->id,
+            'calendar_id' => $calendarA->id,
+            'slug' => 'funnel-a',
+            'is_published' => true,
+        ]);
+
+        $funnelB = Funnel::factory()->create([
+            'location_id' => $locationB->id,
+            'calendar_id' => $calendarB->id,
+            'slug' => 'funnel-b',
+            'is_published' => true,
+        ]);
+
+        $contactA = Contact::factory()->create([
+            'location_id' => $locationA->id,
+            'first_name' => 'Alice From A',
+            'email' => 'alice@example.com',
+            'phone' => '555-0001',
+        ]);
+
+        // Simulate a session value present under funnel B's own key that
+        // points at a contact actually belonging to location A — this is
+        // exactly what the location_id re-check inside sessionContactFor()
+        // must catch.
+        $response = $this->withSession(["funnel_contact_id.{$funnelB->slug}" => $contactA->id])
+            ->get('/f/funnel-b/book?date='.$this->bookingDate()->format('Y-m-d'));
+
+        $response->assertOk();
+        $response->assertDontSee('Alice From A');
+        $response->assertDontSee('alice@example.com');
+
+        $confirm = $this->withSession(["funnel_contact_id.{$funnelB->slug}" => $contactA->id])
+            ->post('/f/funnel-b/book/confirm', [
+                'date' => $this->bookingDate()->format('Y-m-d'),
+                'start_time' => '09:00',
+                'name' => 'Bob From B',
+                'email' => 'bob@example.com',
+                'phone' => '555-0002',
+            ]);
+
+        $confirm->assertRedirect(route('funnels.public.book.confirmed', 'funnel-b'));
+
+        $appointment = Appointment::withoutGlobalScopes()->where('calendar_id', $calendarB->id)->sole();
+        $this->assertNotSame($contactA->id, $appointment->contact_id);
+
+        $bookedContact = Contact::withoutGlobalScopes()->find($appointment->contact_id);
+        $this->assertSame($locationB->id, $bookedContact->location_id);
+        $this->assertSame('bob@example.com', $bookedContact->email);
+
+        // Alice's own contact record is completely untouched.
+        $this->assertSame('Alice From A', $contactA->fresh()->first_name);
+    }
 }
