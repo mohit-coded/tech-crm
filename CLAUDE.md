@@ -364,6 +364,18 @@ GitHub: mohit-coded/tech-crm (private), main branch
   and a cross-tenant `calendar_id`/`location_id` submitted in the
   request body being silently ignored, with the resulting appointment
   still pointing at the funnel's own tenant.
+- **Thank-you-page link to booking is complete:** the original lead
+  capture flow (`funnels/public.blade.php`'s `session('submitted')`
+  state) had no way to reach `/f/{slug}/book` at all — fixed by adding
+  a "Book Your Appointment" link there, guarded by the exact same
+  `$funnel->calendar_id && $funnel->calendar` condition
+  `FunnelPublicController@book` itself uses, so a funnel with no
+  calendar keeps the plain thank-you message rather than showing a
+  pointless/broken link. Covered by two more cases in
+  `FunnelPublicControllerTest`, both driving the real `submit` →
+  thank-you-page flow rather than injecting session state directly:
+  the link appears when the funnel has a calendar, and is absent when
+  it doesn't.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
