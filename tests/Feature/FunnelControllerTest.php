@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Calendar;
 use App\Models\Funnel;
 use App\Models\Location;
 use App\Models\User;
@@ -113,5 +114,52 @@ class FunnelControllerTest extends TestCase
 
         $response->assertNotFound();
         $this->assertNotNull($funnelB->fresh());
+    }
+
+    public function test_can_assign_a_calendar_from_the_same_location_to_a_funnel(): void
+    {
+        [$user] = $this->makeUserWithLocation();
+        $this->actingAs($user);
+
+        $calendar = Calendar::factory()->create(['name' => 'Consultations']);
+        $funnel = Funnel::factory()->create(['name' => 'Spring Promo', 'slug' => 'spring-promo']);
+
+        $response = $this->put("/funnels/{$funnel->id}", [
+            'name' => $funnel->name,
+            'slug' => $funnel->slug,
+            'headline' => $funnel->headline,
+            'button_text' => $funnel->button_text,
+            'calendar_id' => $calendar->id,
+        ]);
+
+        $response->assertRedirect(route('funnels.index'));
+        $this->assertSame($calendar->id, $funnel->fresh()->calendar_id);
+    }
+
+    // Same cross-tenant-smuggling pattern as the AvailabilityRule test on
+    // CalendarControllerTest: attempting to point your own funnel at a
+    // calendar that belongs to a different location must be rejected, not
+    // silently accepted.
+    public function test_cannot_assign_another_locations_calendar_to_own_funnel(): void
+    {
+        [$userA] = $this->makeUserWithLocation();
+        [$userB] = $this->makeUserWithLocation();
+
+        $this->actingAs($userB);
+        $calendarB = Calendar::factory()->create();
+
+        $this->actingAs($userA);
+        $funnelA = Funnel::factory()->create(['name' => 'Spring Promo', 'slug' => 'spring-promo']);
+
+        $response = $this->put("/funnels/{$funnelA->id}", [
+            'name' => $funnelA->name,
+            'slug' => $funnelA->slug,
+            'headline' => $funnelA->headline,
+            'button_text' => $funnelA->button_text,
+            'calendar_id' => $calendarB->id,
+        ]);
+
+        $response->assertSessionHasErrors('calendar_id');
+        $this->assertNull($funnelA->fresh()->calendar_id);
     }
 }

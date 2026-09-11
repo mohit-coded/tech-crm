@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Calendar;
 use App\Models\Funnel;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 class FunnelController extends Controller
@@ -23,7 +26,7 @@ class FunnelController extends Controller
 
     public function create(): View
     {
-        return view('funnels.create');
+        return view('funnels.create', ['calendars' => Calendar::orderBy('name')->get()]);
     }
 
     public function store(Request $request): RedirectResponse
@@ -40,7 +43,10 @@ class FunnelController extends Controller
 
     public function edit(Funnel $funnel): View
     {
-        return view('funnels.edit', ['funnel' => $funnel]);
+        return view('funnels.edit', [
+            'funnel' => $funnel,
+            'calendars' => Calendar::orderBy('name')->get(),
+        ]);
     }
 
     public function update(Request $request, Funnel $funnel): RedirectResponse
@@ -71,6 +77,18 @@ class FunnelController extends Controller
             'headline' => ['required', 'string', 'max:255'],
             'subheadline' => ['nullable', 'string', 'max:255'],
             'button_text' => ['required', 'string', 'max:255'],
+            // Plain 'exists:calendars,id' would query the calendars table
+            // directly, bypassing BelongsToLocation's global scope entirely
+            // (the exists rule isn't Eloquent-aware) — that would let a
+            // cross-tenant calendar_id validate as "existing". Scoping the
+            // exists check to the acting user's own location_id here is
+            // what actually keeps this tenant-safe.
+            'calendar_id' => [
+                'nullable',
+                Rule::exists('calendars', 'id')->where(
+                    fn ($query) => $query->where('location_id', Auth::user()->current_location_id)
+                ),
+            ],
         ]);
 
         $validated['is_published'] = $request->boolean('is_published');

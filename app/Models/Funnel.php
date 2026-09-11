@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Models\Concerns\BelongsToLocation;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Funnel extends Model
 {
@@ -17,6 +18,7 @@ class Funnel extends Model
      */
     protected $fillable = [
         'location_id',
+        'calendar_id',
         'name',
         'slug',
         'headline',
@@ -35,5 +37,10 @@ class Funnel extends Model
         return [
             'is_published' => 'boolean',
         ];
+    }
+
+    public function calendar(): BelongsTo
+    {
+        return $this->belongsTo(Calendar::class);
     }
 }
