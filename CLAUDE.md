@@ -31,7 +31,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Resolving a child model with no `location_id` of its own** (like `PipelineStage`, `AvailabilityRule`): prefer looking it up through its already-tenant-verified parent's relation — `$parent->children()->find($id)`, e.g. `$calendar->availabilityRules()->find($ruleId)` — over a bare `Model::find($id)`. This achieves the same tenant safety as the `withoutGlobalScopes()`-then-compare check documented above, more simply, whenever the parent relation itself is the natural scoping boundary: a foreign/stale child id just won't be found through the wrong parent's relation and is silently excluded, with no separate comparison step needed. Reach for the explicit `withoutGlobalScopes()`-then-compare form instead when there's no such parent relation to scope through (e.g. `OpportunityStageController` needs the `PipelineStage`'s pipeline location compared against the acting user directly, since it isn't resolving through an already-verified parent).
 - **`exists`/`unique` validation rules are not Eloquent-aware:** they query the referenced table directly, completely bypassing `BelongsToLocation`'s global scope. This is a distinct risk from the `withoutGlobalScopes()`/parent-relation conventions above — those are both about *query resolution* (fetching a model instance); this is about *validation*, where there's no model instance or query-builder scope involved at all, just a raw existence check against the table. A plain `'exists:calendars,id'` (or `Rule::exists('calendars', 'id')` with no constraint) on a tenant-scoped foreign key like `calendar_id` or `pipeline_id` will happily validate an id belonging to a *different* tenant as legitimate. Any `exists` rule referencing a `BelongsToLocation`-scoped foreign key must constrain it explicitly: `Rule::exists('calendars', 'id')->where(fn ($q) => $q->where('location_id', Auth::user()->current_location_id))`. See `FunnelController::validated()`'s `calendar_id` rule.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 foundational: Calendars + Availability Rules (admin only, no public booking page yet — see below). Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -257,8 +257,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
   that branch can't actually be reached today, only guarded against).
   This introduced the `appointments` table (`location_id`,
   `calendar_id`, `contact_id`, UTC `starts_at`/`ends_at`, `status`
-  enum `booked`/`cancelled`) purely as a data dependency — no
-  controller, routes, or views for it yet.
+  enum `requested`/`booked`/`cancelled` — `requested` was added later,
+  see Phase 4b below) purely as a data dependency at the time — no
+  controller, routes, or views for it yet (that came with Phase 4b).
 - **Known performance trade-off, left as-is for this foundational
   pass:** `AvailabilitySlotCalculator::bookedIntervals()` fetches
   *all* of a calendar's non-cancelled appointments rather than
@@ -285,6 +286,84 @@ GitHub: mohit-coded/tech-crm (private), main branch
   matching rules returning `[]`; a DST spring-forward day still
   bounding slots to the rule's local start/end times; and the
   calendar → location timezone fallback.
+
+### Public Booking Flow (Phase 4b)
+- Completes the loop `AvailabilitySlotCalculator` was built for: a
+  genuinely public, unauthenticated booking flow layered onto the
+  existing funnel public routes, in the same route group and same
+  `publishedFunnel()` resolution (`withoutGlobalScopes()`,
+  published-only, identical 404 for unpublished/nonexistent slugs) as
+  `show`/`store`. Three routes/methods on `FunnelPublicController`:
+  `GET /f/{slug}/book` (`book`), `POST /f/{slug}/book/confirm`
+  (`confirmBooking`), `GET /f/{slug}/book/confirmed`
+  (`bookingConfirmed`). No `calendar_id` on the funnel → `book()`
+  renders a "booking is not available for this offer" view instead of
+  erroring.
+- **Date-picker design — plain GET + `?date=...`, not a JS/fetch JSON
+  endpoint:** picking a date re-renders `book()` with the slot list
+  from `AvailabilitySlotCalculator`. Chosen over the Kanban-board-style
+  fetch() pattern because it needs no new JSON endpoint or Alpine glue
+  and is trivially testable with a plain HTTP GET — a full page
+  round-trip per date pick is an accepted v1 trade-off here, same
+  "simplest correct option" reasoning as the inline availability-rules
+  form on the calendar edit page.
+- **Carrying the lead's `Contact` through to booking — fresh lookup by
+  email, not session state or a client-supplied id:** `confirmBooking`
+  finds-or-creates a `Contact` by `(location_id, email)`, both supplied
+  by the controller itself, not the request. Rejected alternatives:
+  session state doesn't survive the visitor leaving and coming back to
+  book later; a hidden `contact_id` field would need the exact same
+  re-verification work as this lookup anyway, for no benefit. This is
+  naturally tenant-safe for the same reason the `exists`-rule
+  convention above calls out — nothing here is ever trusted from the
+  request.
+- **The critical race-condition guard:** `confirmBooking()` re-runs
+  `AvailabilitySlotCalculator` for the submitted date immediately
+  before booking (not trusting whatever was shown when the page
+  loaded) and only proceeds if the submitted `start_time` is still in
+  the fresh list; otherwise it redirects back to `book()` (same date)
+  with a `start_time` session error and creates nothing. Slot times
+  returned by the calculator are in the calendar's resolved timezone —
+  explicitly `->setTimezone('UTC')` before being stored, since
+  Eloquent's datetime cast stores whatever timezone the Carbon
+  instance already holds rather than converting for you (see the
+  `starts_at`/`ends_at` comment on `Appointment`).
+- **Known concurrency limitation, accepted for this pass:** the
+  re-validation above closes the "page was loaded a while ago, slot
+  got taken since" case, but not true simultaneous writes — two
+  requests can both pass the "is this slot still available" read at
+  the same instant and both proceed to create an `Appointment` for it,
+  since there's no DB-level constraint stopping that and no row lock
+  taken during the check. Future hardening: a unique constraint on
+  `(calendar_id, starts_at)` scoped to non-cancelled appointments (a
+  partial/filtered unique index, since `cancelled` rows must be
+  allowed to coexist with a new booking at the same time), or a
+  pessimistic lock (`lockForUpdate()`) held across the re-check and
+  the `Appointment::create()` inside `confirmBooking()`'s transaction.
+- Contact/Appointment creation, and the Opportunity stage move, all
+  run inside one `DB::transaction()`. `confirmBooking()` looks up the
+  lead's existing `Opportunity` (by `location_id` + `contact_id`) and,
+  if the pipeline has a stage literally named **"Booking Requested"**
+  (confirmed against the actual seeded name in `DatabaseSeeder` and
+  `RegisteredUserController`), moves it there via `moveToStage()` —
+  the only sanctioned way to change stage, so `OpportunityStageChanged`
+  still fires. New appointments are created with `status: 'requested'`
+  (added to the enum — see the appointments-table note above).
+- The controller never reads a client-supplied `calendar_id` or
+  `location_id` anywhere in `confirmBooking()` — it always uses
+  `$funnel->calendar_id`/`$funnel->location_id`, so there's no code
+  path for a submitted cross-tenant calendar id to do anything at all.
+- Covered by `tests/Feature/FunnelBookingTest.php`: the booking page
+  rendering real slots from the real `AvailabilitySlotCalculator` (not
+  a mock); the no-calendar message; a valid booking creating exactly
+  one `Appointment` with the correct `location_id`/`calendar_id`; the
+  Opportunity moving to "Booking Requested" without duplicating the
+  `Contact`/`Opportunity`; **the double-booking race test** — load the
+  page, create a conflicting `Appointment` in between, then submit the
+  now-stale selection and assert it's rejected with nothing created;
+  and a cross-tenant `calendar_id`/`location_id` submitted in the
+  request body being silently ignored, with the resulting appointment
+  still pointing at the funnel's own tenant.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
