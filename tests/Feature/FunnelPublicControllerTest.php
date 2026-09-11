@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Calendar;
 use App\Models\Contact;
 use App\Models\Funnel;
 use App\Models\Location;
@@ -138,5 +139,55 @@ class FunnelPublicControllerTest extends TestCase
 
         $this->assertSame(1, Contact::withoutGlobalScopes()->where('location_id', $locationA->id)->count());
         $this->assertSame(1, Opportunity::withoutGlobalScopes()->where('location_id', $locationA->id)->count());
+    }
+
+    public function test_thank_you_page_shows_a_booking_link_when_the_funnel_has_a_calendar(): void
+    {
+        [$location] = $this->makeLocationWithPipeline();
+
+        $calendar = Calendar::factory()->create(['location_id' => $location->id]);
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => $calendar->id,
+            'slug' => 'with-calendar',
+            'is_published' => true,
+        ]);
+
+        $this->post('/f/with-calendar/submit', [
+            'name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response = $this->get('/f/with-calendar');
+
+        $response->assertOk();
+        $response->assertSee('Thank you!');
+        $response->assertSee('Book Your Appointment');
+    }
+
+    public function test_thank_you_page_does_not_show_a_booking_link_when_the_funnel_has_no_calendar(): void
+    {
+        [$location] = $this->makeLocationWithPipeline();
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => null,
+            'slug' => 'no-calendar',
+            'is_published' => true,
+        ]);
+
+        $this->post('/f/no-calendar/submit', [
+            'name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response = $this->get('/f/no-calendar');
+
+        $response->assertOk();
+        $response->assertSee('Thank you!');
+        $response->assertDontSee('Book Your Appointment');
     }
 }
