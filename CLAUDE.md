@@ -29,6 +29,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Public/unauthenticated routes and `BelongsToLocation`:** the trait's global scope is inert on these routes, not blocking — there's no `Auth::user()` for it to key off, so a tenant-scoped query with no explicit filter runs fully unscoped across every tenant's rows, not zero rows. This is a different failure mode from the `withoutGlobalScopes()` convention above (which bypasses-and-rechecks a scope that *would* otherwise apply, to get the true value for a comparison) — on a public route there's nothing to bypass, the scope was never going to help, so any tenant-scoped query here needs an explicit `location_id` filter. See `FunnelPublicController@store`, which resolves the funnel via `withoutGlobalScopes()` (correctly — it needs the true row regardless of tenant) but then filters the `Contact`/`Pipeline`/`Opportunity` queries by `$funnel->location_id` explicitly, because none of that scoping happens automatically with no authenticated user.
 - **Factory gotcha:** a factory `definition()` default of `Model::factory()` (a nested factory relation) for a `BelongsToLocation` foreign key defeats the trait's `creating()` auto-fill, because auto-fill only fires when the attribute is genuinely absent — a nested factory always supplies one. `ContactFactory`/`FunnelFactory` deliberately omit `location_id` from their defaults so auto-fill works in tests that rely on it; `OpportunityFactory`/`PipelineFactory` don't, so tests using those must explicitly pass `'location_id' => null` to opt back into auto-fill (see the pattern in `OpportunityTest`).
 - **Resolving a child model with no `location_id` of its own** (like `PipelineStage`, `AvailabilityRule`): prefer looking it up through its already-tenant-verified parent's relation — `$parent->children()->find($id)`, e.g. `$calendar->availabilityRules()->find($ruleId)` — over a bare `Model::find($id)`. This achieves the same tenant safety as the `withoutGlobalScopes()`-then-compare check documented above, more simply, whenever the parent relation itself is the natural scoping boundary: a foreign/stale child id just won't be found through the wrong parent's relation and is silently excluded, with no separate comparison step needed. Reach for the explicit `withoutGlobalScopes()`-then-compare form instead when there's no such parent relation to scope through (e.g. `OpportunityStageController` needs the `PipelineStage`'s pipeline location compared against the acting user directly, since it isn't resolving through an already-verified parent).
+- **`exists`/`unique` validation rules are not Eloquent-aware:** they query the referenced table directly, completely bypassing `BelongsToLocation`'s global scope. This is a distinct risk from the `withoutGlobalScopes()`/parent-relation conventions above — those are both about *query resolution* (fetching a model instance); this is about *validation*, where there's no model instance or query-builder scope involved at all, just a raw existence check against the table. A plain `'exists:calendars,id'` (or `Rule::exists('calendars', 'id')` with no constraint) on a tenant-scoped foreign key like `calendar_id` or `pipeline_id` will happily validate an id belonging to a *different* tenant as legitimate. Any `exists` rule referencing a `BelongsToLocation`-scoped foreign key must constrain it explicitly: `Rule::exists('calendars', 'id')->where(fn ($q) => $q->where('location_id', Auth::user()->current_location_id))`. See `FunnelController::validated()`'s `calendar_id` rule.
 
 ## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 foundational: Calendars + Availability Rules (admin only, no public booking page yet — see below). Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
@@ -178,6 +179,21 @@ GitHub: mohit-coded/tech-crm (private), main branch
   submission creates exactly one `Contact` and `Opportunity` scoped
   to the funnel's own location; submitting funnel A's form never
   creates data in funnel B's location).
+- **Funnel-Calendar linking is complete:** `funnels.calendar_id`
+  (nullable FK, `nullOnDelete`) plus `Funnel::calendar(): BelongsTo`
+  links a funnel to the `Calendar` its leads should book into —
+  chosen from a "Booking Calendar" dropdown (populated from
+  `Calendar::orderBy('name')->get()`, already tenant-scoped) on the
+  create/edit forms, with a "None" option. This is the concrete case
+  for the new `exists`-rule convention above: `calendar_id` is
+  validated with `Rule::exists('calendars', 'id')->where(...
+  'location_id', Auth::user()->current_location_id)`, not a bare
+  `exists:calendars,id`, specifically so a cross-tenant calendar id
+  can't validate as legitimate. Covered by two more cases in
+  `FunnelControllerTest`: assigning a same-location calendar succeeds,
+  and assigning another location's calendar id is rejected
+  (`assertSessionHasErrors('calendar_id')`) with `calendar_id`
+  confirmed still `null` on the funnel afterward.
 
 ### Calendars + Availability Rules (Phase 4, foundational)
 - Admin-only foundation for scheduling — no public booking page yet,
