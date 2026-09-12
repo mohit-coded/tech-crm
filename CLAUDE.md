@@ -31,8 +31,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Resolving a child model with no `location_id` of its own** (like `PipelineStage`, `AvailabilityRule`): prefer looking it up through its already-tenant-verified parent's relation — `$parent->children()->find($id)`, e.g. `$calendar->availabilityRules()->find($ruleId)` — over a bare `Model::find($id)`. This achieves the same tenant safety as the `withoutGlobalScopes()`-then-compare check documented above, more simply, whenever the parent relation itself is the natural scoping boundary: a foreign/stale child id just won't be found through the wrong parent's relation and is silently excluded, with no separate comparison step needed. Reach for the explicit `withoutGlobalScopes()`-then-compare form instead when there's no such parent relation to scope through (e.g. `OpportunityStageController` needs the `PipelineStage`'s pipeline location compared against the acting user directly, since it isn't resolving through an already-verified parent).
 - **`exists`/`unique` validation rules are not Eloquent-aware:** they query the referenced table directly, completely bypassing `BelongsToLocation`'s global scope. This is a distinct risk from the `withoutGlobalScopes()`/parent-relation conventions above — those are both about *query resolution* (fetching a model instance); this is about *validation*, where there's no model instance or query-builder scope involved at all, just a raw existence check against the table. A plain `'exists:calendars,id'` (or `Rule::exists('calendars', 'id')` with no constraint) on a tenant-scoped foreign key like `calendar_id` or `pipeline_id` will happily validate an id belonging to a *different* tenant as legitimate. Any `exists` rule referencing a `BelongsToLocation`-scoped foreign key must constrain it explicitly: `Rule::exists('calendars', 'id')->where(fn ($q) => $q->where('location_id', Auth::user()->current_location_id))`. See `FunnelController::validated()`'s `calendar_id` rule.
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
+- **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5a complete: Conversations data model + outbound SMS sending (admin only, no public webhook yet) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -408,6 +409,64 @@ GitHub: mohit-coded/tech-crm (private), main branch
   above; the case-insensitive `whereRaw` is the secondary hardening for
   visitors who never went through the lead form in this session to
   begin with.
+
+### Conversations (Phase 5a — data model + outbound SMS, no public webhook yet)
+- `messages` (`location_id` `BelongsToLocation`, `contact_id` FK,
+  `direction` enum `inbound`/`outbound`, `body` text, nullable
+  `twilio_sid`, `status` enum `queued`/`sent`/`delivered`/`failed`/
+  `received` default `queued`) is a normal tenant table.
+  `Message belongsTo Contact`; `Contact::messages(): HasMany`. Also
+  added a nullable `locations.twilio_phone_number` — not consumed by
+  anything yet (the sender always uses `config('services.twilio.
+  phone_number')` as the `from` number), just the column for when
+  per-location numbers are wired in.
+- **`SmsSender` is the template for wrapping any third-party API** —
+  see the new Conventions entry above for the general shape. Concretely
+  here: `App\Services\SmsSender` (interface) / `TwilioSmsSender`
+  (real implementation, wraps `Twilio\Rest\Client`) / `SmsSendResult`
+  (value object — `successful`, `sid`, `errorMessage`). `send()` never
+  throws: `TwilioSmsSender` catches any Twilio exception internally
+  and returns a failed `SmsSendResult` instead, so callers have one
+  uniform way to branch on outcome.
+- `SendSmsMessage implements ShouldQueue` (`app/Jobs/`) takes an
+  already-created `Message` (status `queued`, `location_id` already
+  set — queued jobs run with no authenticated user, so nothing here
+  can rely on `Auth::user()` or `BelongsToLocation`'s auto-fill).
+  `handle(SmsSender $sender)` resolves the sender via the container
+  (swappable in tests), updates `status`/`twilio_sid` to `sent` on
+  success, and on failure — whether a returned failed result or a
+  genuinely unexpected exception — logs via `Log::error()` and sets
+  `status: 'failed'`, never letting anything throw out of the job.
+- `MessageController@store` (`POST /messages`, `auth` middleware, no
+  view yet — that's Part C) creates the `Message` and dispatches
+  `SendSmsMessage`. Same `exists`-rule avoidance as the established
+  convention: `contact_id` is validated as a plain integer, not
+  `exists:contacts,id`, and resolved via `Contact::findOrFail()`
+  instead — which runs through the live `BelongsToLocation` scope
+  here (the user is authenticated, unlike a public route), so a
+  cross-tenant `contact_id` 404s before any `Message` is created.
+  `location_id` is set explicitly from
+  `Auth::user()->current_location_id`.
+- **Tests never make a real Twilio API call:** `Tests\Fakes\
+  FakeSmsSender` is bound in place of `TwilioSmsSender` for every test
+  that touches sending, and because the real binding in
+  `AppServiceProvider` is a lazy singleton closure, the real
+  `Twilio\Rest\Client` is never constructed unless something actually
+  resolves `SmsSender::class` first — which these tests never let
+  happen. Covered by `tests/Feature/MessageControllerTest.php`
+  (`Queue::fake()` + `assertPushed` for a valid send with the right
+  `location_id`/`contact_id`; a cross-tenant `contact_id` 404s,
+  creates no `Message`, and never dispatches the job) and
+  `tests/Feature/SendSmsMessageTest.php` (calls
+  `(new SendSmsMessage($message))->handle($fakeSender)` directly, no
+  queue worker — success sets `sent` + `twilio_sid`; failure sets
+  `failed` and asserts, via `Log::spy()`, that the error was logged
+  rather than thrown).
+- **Not committed, must be set manually:** `TWILIO_ACCOUNT_SID`,
+  `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER` are in `.env.example`
+  as obviously-fake placeholders only. Outbound sending won't actually
+  work in any environment until real Twilio credentials are added to
+  that environment's own `.env` by hand.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
