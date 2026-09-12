@@ -12,7 +12,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        $middleware->alias([
+            'twilio.signature' => \App\Http\Middleware\VerifyTwilioSignature::class,
+        ]);
+
+        // Twilio's webhook POST carries no Laravel CSRF token — signature
+        // verification (VerifyTwilioSignature) is what authenticates this
+        // route instead.
+        $middleware->validateCsrfTokens(except: [
+            'webhooks/twilio/sms',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

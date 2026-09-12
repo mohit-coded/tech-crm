@@ -11,6 +11,7 @@ use App\Http\Controllers\MessageController;
 use App\Http\Controllers\OpportunityBoardController;
 use App\Http\Controllers\OpportunityStageController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\TwilioWebhookController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -59,5 +60,14 @@ Route::post('/f/{slug}/submit', [FunnelPublicController::class, 'store'])->name(
 Route::get('/f/{slug}/book', [FunnelPublicController::class, 'book'])->name('funnels.public.book');
 Route::post('/f/{slug}/book/confirm', [FunnelPublicController::class, 'confirmBooking'])->name('funnels.public.book.confirm');
 Route::get('/f/{slug}/book/confirmed', [FunnelPublicController::class, 'bookingConfirmed'])->name('funnels.public.book.confirmed');
+
+// Twilio SMS webhook — public (not in the 'auth' group), but protected
+// by signature verification instead (see VerifyTwilioSignature), which
+// runs before any other logic and rejects with 403 on a bad/missing
+// signature. Also excluded from CSRF verification in bootstrap/app.php,
+// since Twilio's POST carries no Laravel CSRF token.
+Route::post('/webhooks/twilio/sms', [TwilioWebhookController::class, 'sms'])
+    ->middleware('twilio.signature')
+    ->name('webhooks.twilio.sms');
 
 require __DIR__.'/auth.php';
