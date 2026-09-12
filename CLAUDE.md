@@ -33,7 +33,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 - **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5a built + code-reviewed: Conversations data model + outbound SMS sending (admin only, no public webhook yet), but unverified against a real Twilio send — blocked by a trial-account restriction, see below. Phase 5b complete: inbound SMS webhook — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -538,6 +538,48 @@ GitHub: mohit-coded/tech-crm (private), main branch
   and two locations with different numbers — an inbound message to
   location A's number never creates data under location B, even when
   the `From` number coincidentally matches an existing contact there.
+
+### Conversations (Phase 5c — inbox UI, complete; closes Phase 5)
+- `ConversationController@index` (`GET /conversations`) lists
+  `Contact`s that have at least one `Message`
+  (`Contact::whereHas('messages')`), ordered by their most recent
+  message's `created_at` descending via `withMax('messages',
+  'created_at')` + `orderByDesc('messages_max_created_at')`, with a
+  truncated preview of the last message body. That preview comes from
+  the new `Contact::latestMessage(): HasOne` relation (a
+  `latestOfMany()` `Message`), eager-loaded alongside — avoids pulling
+  every message for a contact just to read the last one. No manual
+  `location_id` filtering, same as everywhere else.
+- `ConversationController@show(Contact $contact)`
+  (`GET /conversations/{contact}`) is route-model-bound and
+  tenant-safe via the same live `BelongsToLocation` scope as every
+  other admin controller — no extra check needed. Loads all of that
+  contact's messages in chronological order (inbound and outbound
+  interleaved) for the thread view.
+- Thread view (`conversations/show.blade.php`) reuses existing
+  Tailwind patterns rather than inventing new styling: the same
+  card container as other admin pages, plain flex (`justify-start`/
+  `justify-end`) with the app's existing color tokens (indigo-600 for
+  outbound, gray-100/700 for inbound) for the bubbles, and the
+  existing `x-text-input`/`x-primary-button`/`x-input-error`
+  components for the send form at the bottom.
+- **The send form posts to the existing `messages.store` route
+  (`MessageController@store`) with `contact_id` as a hidden field —
+  no new send endpoint was needed.** `MessageController@store`
+  already redirected via `redirect()->back()`; this was verified,
+  not assumed, to correctly return to the conversation thread page,
+  since the form's `action` posts from that exact page and the
+  browser's `Referer` header reflects it. The test drives this
+  explicitly with `$this->from($threadUrl)->post(...)` and asserts
+  the redirect target, rather than trusting `back()` blindly.
+- Covered by `tests/Feature/ConversationControllerTest.php`: index
+  tenant isolation (also proving a contact with zero messages is
+  excluded from the list); index ordering by most-recent-message
+  descending; `show()` 404s for a cross-tenant contact; `show()`
+  renders inbound/outbound messages in correct chronological order;
+  and sending from the thread (`Queue::fake()`, same pattern as
+  `MessageControllerTest`) creates the message, redirects back to
+  that same thread, and the thread then displays it.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
