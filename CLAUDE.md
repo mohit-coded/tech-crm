@@ -33,7 +33,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 - **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5a complete: Conversations data model + outbound SMS sending (admin only, no public webhook yet) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5a built + code-reviewed: Conversations data model + outbound SMS sending (admin only, no public webhook yet), but unverified against a real Twilio send — blocked by a trial-account restriction, see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -410,7 +410,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
   visitors who never went through the lead form in this session to
   begin with.
 
-### Conversations (Phase 5a — data model + outbound SMS, no public webhook yet)
+### Conversations (Phase 5a — data model + outbound SMS, no public webhook yet; built + code-reviewed, UNVERIFIED against a real send — see below)
 - `messages` (`location_id` `BelongsToLocation`, `contact_id` FK,
   `direction` enum `inbound`/`outbound`, `body` text, nullable
   `twilio_sid`, `status` enum `queued`/`sent`/`delivered`/`failed`/
@@ -467,6 +467,19 @@ GitHub: mohit-coded/tech-crm (private), main branch
   as obviously-fake placeholders only. Outbound sending won't actually
   work in any environment until real Twilio credentials are added to
   that environment's own `.env` by hand.
+- **UNVERIFIED against a real Twilio send — blocked on a trial-account
+  restriction, not a code issue.** Everything above is built and
+  code-reviewed (tests pass, and prove the plumbing — job, status
+  transitions, tenant isolation — is wired correctly against a fake
+  sender), but a real send through `TwilioSmsSender` has not actually
+  succeeded end-to-end. A real attempt failed with: *"Invalid template
+  name. Trial accounts can only use predefined SMS templates."* —
+  Twilio trial accounts can't send arbitrary/custom message bodies
+  (like the appointment-confirmation text this feature sends), only
+  pre-approved template messages, until the account is upgraded to
+  paid. Revisit and actually verify a real send once the Twilio
+  account in use is upgraded — don't assume this phase is
+  production-ready against live Twilio before that happens.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
