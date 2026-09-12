@@ -33,7 +33,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 - **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5a built + code-reviewed: Conversations data model + outbound SMS sending (admin only, no public webhook yet), but unverified against a real Twilio send — blocked by a trial-account restriction, see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5a built + code-reviewed: Conversations data model + outbound SMS sending (admin only, no public webhook yet), but unverified against a real Twilio send — blocked by a trial-account restriction, see below. Phase 5b complete: inbound SMS webhook — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -480,6 +480,64 @@ GitHub: mohit-coded/tech-crm (private), main branch
   paid. Revisit and actually verify a real send once the Twilio
   account in use is upgraded — don't assume this phase is
   production-ready against live Twilio before that happens.
+
+### Conversations (Phase 5b — inbound SMS webhook, complete)
+- `POST /webhooks/twilio/sms` (`TwilioWebhookController@sms`) is
+  public — not in the `auth` group — but protected by the new
+  `twilio.signature` middleware (`App\Http\Middleware\
+  VerifyTwilioSignature`, aliased in `bootstrap/app.php`) instead,
+  which runs before any other logic and aborts 403 on a missing or
+  invalid `X-Twilio-Signature`. That middleware validates via
+  `Twilio\Security\RequestValidator` against `config('services.
+  twilio.token')`, `request()->fullUrl()`, and `request()->post()`.
+  The route is also explicitly excluded from CSRF validation in
+  `bootstrap/app.php` (`$middleware->validateCsrfTokens(except:
+  [...])`) — Twilio's POST carries no Laravel CSRF token, and
+  signature verification is what authenticates this route instead.
+- **Caveat: `request()->fullUrl()` may not match the public URL
+  Twilio actually POSTed to, once this is behind a reverse proxy or
+  tunnel.** Signature validation needs the *exact* public URL Twilio
+  used — fine for direct requests, but behind ngrok, a load balancer,
+  or real hosting, the scheme/host Laravel sees can differ from
+  what's publicly reachable, which would make a genuinely valid
+  signature fail this check. If that happens, look at Laravel's
+  trusted-proxy config (the `TrustProxies` middleware / `X-Forwarded-
+  *` headers) before assuming the signature itself is wrong — this is
+  flagged in a comment directly on `VerifyTwilioSignature` too.
+  Revisit once this actually goes live behind ngrok or real hosting;
+  assuming direct requests for now.
+- **Resolving a `Location` by the `To` number is deliberately
+  cross-tenant** — there's no `location_id` to scope this lookup by
+  yet, it's what we're discovering. This is safe specifically because
+  `VerifyTwilioSignature` has already run and proven the request came
+  from *our* Twilio account about a message sent to *one of our own*
+  verified numbers — it's trusting Twilio's signed assertion of which
+  of our numbers received it, not an arbitrary claim from an
+  unauthenticated client the way an unscoped lookup on a public form
+  would be. No match on `twilio_phone_number` → empty 200 TwiML, no
+  error (an unrecognized number isn't a transient failure worth
+  Twilio retrying). Once a `Location` is found, the `Contact`
+  lookup-or-create by the `From` number *is* scoped explicitly by
+  `location_id` — same discipline as the Funnels public routes,
+  since `BelongsToLocation`'s scope is inert with no authenticated
+  user.
+- Every inbound message creates a `Message` with `direction:
+  'inbound'`, `status: 'received'`, `body` from `Body`, `twilio_sid`
+  from `MessageSid`, and the controller always responds with the
+  minimal `<?xml version="1.0" encoding="UTF-8"?><Response></
+  Response>` TwiML so Twilio doesn't treat it as a failure.
+- Covered by `tests/Feature/TwilioWebhookTest.php`, with every test
+  signature computed via Twilio's own `RequestValidator` against a
+  fake token bound in `config()` — never hardcoded. Cases: a valid
+  signature with a matching `To` creates exactly one `Message` and
+  `Contact`, scoped correctly; a second inbound message from the same
+  number reuses that `Contact` rather than duplicating it; **an
+  invalid or missing signature is rejected with 403 and creates
+  nothing** (the important one); a valid signature with an
+  unrecognized `To` returns 200 and creates nothing, not an error;
+  and two locations with different numbers — an inbound message to
+  location A's number never creates data under location B, even when
+  the `From` number coincidentally matches an existing contact there.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
