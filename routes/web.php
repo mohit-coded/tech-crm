@@ -7,6 +7,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FunnelController;
 use App\Http\Controllers\FunnelPublicController;
 use App\Http\Controllers\LocationSwitchController;
+use App\Http\Controllers\MessageController;
 use App\Http\Controllers\OpportunityBoardController;
 use App\Http\Controllers\OpportunityStageController;
 use App\Http\Controllers\ProfileController;
@@ -37,6 +38,9 @@ Route::middleware('auth')->group(function () {
     Route::get('/appointments', [AppointmentController::class, 'index'])->name('appointments.index');
     Route::post('/appointments/{appointment}/confirm', [AppointmentController::class, 'confirm'])->name('appointments.confirm');
     Route::post('/appointments/{appointment}/cancel', [AppointmentController::class, 'cancel'])->name('appointments.cancel');
+
+    // No inbox UI yet (Part C) — just the send endpoint.
+    Route::post('/messages', [MessageController::class, 'store'])->name('messages.store');
 
     Route::get('/opportunities', [OpportunityBoardController::class, 'index'])
         ->name('opportunities.index');

@@ -20,6 +20,7 @@ class Location extends Model
         'name',
         'email',
         'phone',
+        'twilio_phone_number',
         'address',
         'city',
         'state',

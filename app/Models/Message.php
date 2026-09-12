@@ -5,9 +5,9 @@ namespace App\Models;
 use App\Models\Concerns\BelongsToLocation;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class Contact extends Model
+class Message extends Model
 {
     use HasFactory, BelongsToLocation;
 
@@ -18,14 +18,15 @@ class Contact extends Model
      */
     protected $fillable = [
         'location_id',
-        'first_name',
-        'last_name',
-        'email',
-        'phone',
+        'contact_id',
+        'direction',
+        'body',
+        'twilio_sid',
+        'status',
     ];
 
-    public function messages(): HasMany
+    public function contact(): BelongsTo
     {
-        return $this->hasMany(Message::class);
+        return $this->belongsTo(Contact::class);
     }
 }
