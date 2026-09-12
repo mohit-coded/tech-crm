@@ -3,6 +3,7 @@
 use App\Http\Controllers\AppointmentController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\ContactController;
+use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FunnelController;
 use App\Http\Controllers\FunnelPublicController;
@@ -40,8 +41,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/appointments/{appointment}/confirm', [AppointmentController::class, 'confirm'])->name('appointments.confirm');
     Route::post('/appointments/{appointment}/cancel', [AppointmentController::class, 'cancel'])->name('appointments.cancel');
 
-    // No inbox UI yet (Part C) — just the send endpoint.
     Route::post('/messages', [MessageController::class, 'store'])->name('messages.store');
+
+    Route::get('/conversations', [ConversationController::class, 'index'])->name('conversations.index');
+    Route::get('/conversations/{contact}', [ConversationController::class, 'show'])->name('conversations.show');
 
     Route::get('/opportunities', [OpportunityBoardController::class, 'index'])
         ->name('opportunities.index');
