@@ -39,6 +39,10 @@
                     <x-nav-link :href="route('conversations.index')" :active="request()->routeIs('conversations.*')">
                         {{ __('Conversations') }}
                     </x-nav-link>
+
+                    <x-nav-link :href="route('campaigns.index')" :active="request()->routeIs('campaigns.*')">
+                        {{ __('Campaigns') }}
+                    </x-nav-link>
                 </div>
             </div>
 
@@ -151,6 +155,10 @@
 
             <x-responsive-nav-link :href="route('conversations.index')" :active="request()->routeIs('conversations.*')">
                 {{ __('Conversations') }}
+            </x-responsive-nav-link>
+
+            <x-responsive-nav-link :href="route('campaigns.index')" :active="request()->routeIs('campaigns.*')">
+                {{ __('Campaigns') }}
             </x-responsive-nav-link>
         </div>
 
