@@ -33,7 +33,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 - **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 Stage 1 complete: Campaigns data model + admin CRUD — see below; no execution engine yet, nothing enrolls a contact or sends anything automatically. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -580,6 +580,76 @@ GitHub: mohit-coded/tech-crm (private), main branch
   and sending from the thread (`Queue::fake()`, same pattern as
   `MessageControllerTest`) creates the message, redirects back to
   that same thread, and the thread then displays it.
+
+### Campaigns (Phase 6, Stage 1 — data model + admin CRUD only)
+- **No execution engine yet.** `campaigns`/`campaign_steps`/
+  `campaign_enrollments` exist and can be managed through the admin
+  UI, but nothing in the app currently enrolls a `Contact`, advances
+  an enrollment through its steps, or sends anything automatically —
+  `trigger_event` on a `Campaign` is just a string field right now,
+  not wired to any actual event listener. Same incremental approach
+  as `AvailabilitySlotCalculator` (Phase 4): build and test the data
+  layer in isolation first, wire up execution later.
+- `campaigns` (`location_id` `BelongsToLocation`, `name`,
+  `trigger_event`, `is_active` default true) is a normal tenant
+  table. `campaign_steps` (`campaign_id` FK cascadeOnDelete,
+  `position`, `channel` enum `sms`/`email`, `body`, `delay_minutes`
+  default 0) has no `location_id` of its own — same situation as
+  `AvailabilityRule`/`PipelineStage`, scoped only indirectly via
+  `campaign_id` → `Campaign` → `location_id`. `campaign_enrollments`
+  (`location_id` `BelongsToLocation`, `campaign_id`, `contact_id`,
+  nullable `current_step_id` → `campaign_steps` with `nullOnDelete` —
+  an enrollment shouldn't vanish just because the step it's on gets
+  deleted later, `status` enum `active`/`completed`/`cancelled`
+  default `active`) exists as a table + model
+  (`CampaignEnrollment belongsTo Campaign/Contact/currentStep`) but
+  nothing creates rows in it yet. `Campaign hasMany CampaignStep`
+  (`steps()`, ordered by `position`) and `hasMany CampaignEnrollment`
+  (`enrollments()`); `CampaignStep belongsTo Campaign`.
+- `CampaignController` (`Route::resource('campaigns',
+  CampaignController::class)->except('show')`, inside the `auth`
+  middleware group) is the admin CRUD: index, create, store, edit,
+  update, destroy — same shape and tenant-isolation reasoning as
+  Calendars/Contacts/Funnels CRUD.
+- **Steps are managed inline on the campaign edit page, reusing
+  Calendars' inline-availability-rules pattern exactly** — proven
+  there already, so no new pattern was invented: one `<form>` submits
+  the campaign fields together with its steps in a single `PUT
+  /campaigns/{campaign}` request. Existing rows come in keyed by step
+  id (`steps[{id}][channel|body|delay_minutes|remove]`) with a
+  "Remove" checkbox; a fixed 3 blank `new_steps[i][...]` rows below
+  them are silently skipped if left without a body.
+  `CampaignController::syncSteps()` is a near-literal mirror of
+  `CalendarController::syncAvailabilityRules()`.
+- **Same tenant-check discipline as `AvailabilityRule`:** existing
+  step rows are resolved via `$campaign->steps()->find($stepId)`,
+  never a bare `CampaignStep::find($id)` — since `$campaign` is
+  already route-model-bound and tenant-verified, a step id belonging
+  to another campaign (same tenant or a different one) simply isn't
+  found through that relation and is silently skipped, never updated
+  or deleted.
+- **Blade gotcha caught before it shipped:** an early draft of
+  `campaigns/edit.blade.php` wrote
+  `:value="old(\"steps.{$step->id}.body\", ...)"` — nesting a
+  double-quoted, interpolated PHP string literal inside a Blade
+  *component*'s `:value="..."` binding (itself double-quoted), which
+  breaks Blade's attribute-quote parsing. This is different from
+  `calendars/edit.blade.php`'s plain `<input value="{{ old(\"...\")
+  }}">`, where `{{ }}` is just an echo with no such constraint —
+  components and plain echoed attributes don't have the same quoting
+  rules. Fixed by using single-quoted string concatenation instead:
+  `old('steps.'.$step->id.'.body', ...)`. Worth remembering before
+  reusing this exact inline-rows pattern again with `<x-text-input>`
+  instead of a plain `<input>`.
+- Covered by `tests/Feature/CampaignControllerTest.php`: index/store
+  isolation and edit/update/destroy 404s, same shape as
+  `CalendarControllerTest`, plus step-specific cases — adding,
+  editing, and removing a step, and (the important ones, mirroring
+  `CalendarControllerTest`'s availability-rule test exactly) two
+  cases proving a smuggled foreign-location step id through your own
+  campaign's update is silently ignored — whether the attempted
+  operation was an edit or a removal — leaving the real owner's step
+  completely untouched.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
