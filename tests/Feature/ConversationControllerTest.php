@@ -153,6 +153,67 @@ class ConversationControllerTest extends TestCase
         $this->assertLessThan($thirdPos, $secondPos);
     }
 
+    // Regression test: a mixed thread (9 messages, matching the volume
+    // from the bug report) must render EVERY message body regardless of
+    // direction — not just assert relative order, which a subtler bug
+    // (e.g. a filter that drops one direction entirely) could dodge if
+    // the dropped messages just happen to leave the remaining ones in
+    // relative order. Asserts directly against the rendered response,
+    // not the $messages collection the controller built.
+    public function test_show_renders_every_message_body_regardless_of_direction(): void
+    {
+        [$user, $location] = $this->makeUserWithLocation();
+        $this->actingAs($user);
+
+        $contact = Contact::factory()->create(['location_id' => $location->id]);
+
+        $bodies = [
+            'outbound' => [
+                'Hi! This is a reminder about your appointment tomorrow.',
+                'Just checking in — are we still on for 2pm?',
+                'Thanks for confirming, see you then!',
+                'Following up after your visit — how did it go?',
+                'Here is the link to leave a review.',
+            ],
+            'inbound' => [
+                'Yes, still works for me.',
+                'Can we push it back 30 minutes?',
+                'It went great, thanks!',
+                'Just left one, thanks for asking.',
+            ],
+        ];
+
+        $minutesAgo = count($bodies['outbound']) + count($bodies['inbound']);
+        foreach (array_merge(
+            array_map(fn ($body) => ['direction' => 'outbound', 'body' => $body], $bodies['outbound']),
+            array_map(fn ($body) => ['direction' => 'inbound', 'body' => $body], $bodies['inbound'])
+        ) as $data) {
+            Message::factory()->create([
+                'location_id' => $location->id,
+                'contact_id' => $contact->id,
+                'direction' => $data['direction'],
+                'body' => $data['body'],
+                'created_at' => now()->subMinutes($minutesAgo--),
+            ]);
+        }
+
+        $this->assertSame(9, Message::withoutGlobalScopes()->where('contact_id', $contact->id)->count());
+
+        $response = $this->get("/conversations/{$contact->id}");
+
+        $response->assertOk();
+
+        foreach ([...$bodies['outbound'], ...$bodies['inbound']] as $body) {
+            $response->assertSee($body);
+        }
+
+        // Also confirm outbound and inbound are actually rendered with
+        // visually distinct markup, not just present as plain text.
+        $response->assertSee('justify-end', false);
+        $response->assertSee('justify-start', false);
+        $response->assertSee('bg-indigo-600', false);
+    }
+
     public function test_sending_a_message_from_the_thread_redirects_back_to_the_same_thread_and_appears_in_it(): void
     {
         Queue::fake();
