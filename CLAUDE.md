@@ -35,7 +35,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
 - **Stale-relation gotcha (hit building `EnrollContactsOnStageEntry`, Phase 6 Stage 3):** after calling a method that updates a model's own attribute in place — `moveToStage()` updating `pipeline_stage_id` via `$this->update()` is the concrete case — don't trust an already-accessed relation on that *same in-memory instance* anywhere later in the same request/listener/job chain, even indirectly (e.g. the same object reused across two dispatches of the same event). Eloquent caches a `BelongsTo`/etc. relation the first time it's accessed and `update()` doesn't invalidate that cache, so `$model->someRelation` can keep returning the pre-update related row instead of the one the updated foreign key now points to. This bit the listener directly: it read `$opportunity->stage?->name` to get the newly-entered stage's name, but on a `moveToStage()` call that stage relation had already been cached (from `stage_id` before the move) by an earlier access — e.g. the same listener already having run once for that opportunity's *creation* — so it silently read the stage being moved *out of* instead of the one moved *into*. The fix, and the reusable lesson: look the related row up fresh by the id you actually have in hand (here, `PipelineStage::find($event->newStageId)`) rather than walking a relation off a model instance whose attributes changed underneath it — `$model->fresh()->someRelation` also works, but a direct fresh `Model::find($id)` on the id you already have is simpler when you don't need the rest of the model reloaded too. Caught by `CampaignTriggerTest`'s `moveToStage()` case failing against a listener that looked correct in isolation — worth remembering any time an event fired *after* an in-place `update()` needs to read the post-update related state through a relation.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 Stage 1 complete: appointment completion (`Appointment.completed_at` + `AppointmentController@complete`) and the reputation-adjacent trigger it fires (`AppointmentCompleted` → auto-enrollment on a fixed `'appointment_completed'` trigger_event) — see below; actual review-request sending (the rest of Phase 7) is still open. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -866,6 +866,88 @@ GitHub: mohit-coded/tech-crm (private), main branch
   double-enrolled; a campaign in a different location with an
   exactly-matching `trigger_event` is never triggered; and an inactive
   campaign with a matching `trigger_event` enrolls no one.
+
+### Dynamic review link + message placeholders (Phase 7, Stage 2; closes Phase 7)
+- Adds a nullable `google_review_url` (string) column to `locations`,
+  now in `Location::$fillable`. No admin UI of any kind existed for
+  editing `Location`-level settings before this — locations were only
+  ever created via registration or tinker — so this is also the first
+  such page.
+- **`LocationSettingsController`** (`edit`/`update` only, `auth`
+  middleware, `GET`/`PUT /settings`) is deliberately *not* a
+  route-model-bound resource controller — there's one settings page
+  per location, not a list, so both methods act directly on
+  `Auth::user()->currentLocation` with no `{location}` route
+  parameter at all. **This makes it tenant-safe by construction, not
+  by a check:** unlike every other controller in this app (which
+  needs an explicit 404-on-cross-tenant-id test because a malicious id
+  could be substituted into the URL), there is structurally no id in
+  this route to substitute — `update()` can only ever act on whichever
+  location `current_location_id` already points to. Proven, not just
+  asserted, by `LocationSettingsControllerTest`'s "only ever affects
+  the authenticated user's own current location" test: acting as user
+  A and submitting the update changes only location A, leaving a
+  freshly-created location B (which the test never even routes
+  through) completely untouched. Kept deliberately minimal to just the
+  `google_review_url` field for this phase, even though `Location` has
+  several other fillable fields (`phone`, `timezone`, etc.) with no
+  admin UI of their own either — expanding this page to cover those is
+  explicitly out of scope here, same incremental-build reasoning as
+  `AvailabilitySlotCalculator`/Campaigns Stage 1: build what the
+  current phase actually needs, not a speculative full settings page.
+  A "Settings" link was added to both the desktop and mobile nav,
+  alongside the existing top-level links.
+- **`App\Services\ResolvesMessagePlaceholders::resolve(string $body,
+  Contact $contact, Location $location): string`** is the
+  placeholder-substitution engine campaign message bodies run through.
+  Supports exactly two placeholders — `{{review_link}}` (→
+  `$location->google_review_url`, or `''` if not set — never leaves
+  the literal placeholder behind) and `{{contact.first_name}}` (→
+  `$contact->first_name`) — via a plain `strtr()` call with a fixed
+  replacement map. **An unrecognized placeholder (e.g. a typo like
+  `{{contct.first_name}}`) is deliberately left exactly as written,
+  not stripped** — `strtr()` only touches the exact keys given it, so
+  anything else in the body passes through untouched. This is a
+  conscious choice, not an oversight: silently eating unknown
+  `{{...}}` syntax would make a typo invisible in the admin UI and
+  only show up (if at all) as a confusingly blank spot in a sent
+  message; leaving it as literal text makes the typo obvious and
+  debuggable in the message itself.
+- **Wired into `SendCampaignStep`:** for an `sms` step, the body
+  passed to `Message::create()` is now
+  `ResolvesMessagePlaceholders::resolve($this->step->body,
+  $enrollment->contact, $enrollment->location)` instead of the raw
+  `$this->step->body` — resolved against the *freshly re-fetched*
+  `$enrollment`'s own `contact()`/`location()` relations (`location()`
+  comes from `BelongsToLocation` itself), not the job's original
+  constructor arguments, so this is naturally safe from the
+  stale-relation gotcha documented above (the enrollment fetched via
+  `CampaignEnrollment::find()` at the top of `handle()` is a brand new
+  object with nothing cached on it yet). The `email` branch is
+  unaffected — it's still just a logged no-op, see Phase 6 Stage 2.
+- **Admin form:** the `trigger_event` `<select>` (Phase 6 Stage 3 /
+  Phase 7 Stage 1) doesn't need any changes for placeholders — they're
+  just plain text an admin types into a step's `body` field on the
+  existing campaign edit page, not a separate UI concept.
+- Covered by three things. `Tests\Unit\ResolvesMessagePlaceholdersTest`:
+  both placeholders resolve correctly together; an unset
+  `google_review_url` resolves to an empty string rather than leaving
+  `{{review_link}}` in the output; an unrecognized placeholder is left
+  untouched verbatim. A new case in `CampaignExecutionTest`
+  (`...resolves_message_placeholders_with_real_contact_and_location_values`):
+  a real `EnrollsContacts::enroll()` call followed by a real
+  `SendCampaignStep::handle()` call (same "call the job's `handle()`
+  directly" pattern every other job-side-effect test in that file
+  already uses — `Queue::fake()` is only there to stop the
+  `SendSmsMessage` this step dispatches from actually running, since
+  that would otherwise attempt a real Twilio call under this app's
+  `QUEUE_CONNECTION=sync` test setting) produces a `Message` whose
+  body has the real contact first name and review URL substituted in,
+  not the raw `{{...}}` template text. `LocationSettingsControllerTest`:
+  the edit page renders the current location's saved
+  `google_review_url`; a `PUT` updates it on the authenticated user's
+  current location; and the tenant-isolation-by-construction test
+  described above.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
