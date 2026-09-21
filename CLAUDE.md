@@ -264,19 +264,34 @@ GitHub: mohit-coded/tech-crm (private), main branch
   enum `requested`/`booked`/`cancelled` — `requested` was added later,
   see Phase 4b below) purely as a data dependency at the time — no
   controller, routes, or views for it yet (that came with Phase 4b).
-- **Known performance trade-off, left as-is for this foundational
-  pass:** `AvailabilitySlotCalculator::bookedIntervals()` fetches
-  *all* of a calendar's non-cancelled appointments rather than
-  filtering by a date range around the requested day, then does the
-  overlap check in PHP. Correctness was prioritized over query
-  scope/precision here — date-range filtering across a stored-UTC
-  column against a local calendar day has timezone-boundary edge
-  cases that are easy to get subtly wrong, and appointment volume per
-  calendar is expected to stay small at this stage. Flagged as the
-  place to add a `whereBetween('starts_at', [...])` (bounded a day on
-  each side of the local date, in UTC, to stay correct across any
-  offset) once a calendar's appointment history grows enough for this
-  to matter.
+- **Performance trade-off from the original foundational pass — now
+  closed (booking-engine hardening pass):** `bookedIntervals()` used to
+  fetch *all* of a calendar's non-cancelled appointments rather than
+  filtering by a date range, prioritizing correctness over query scope
+  at the time — date-range filtering across a stored-UTC column
+  against a local calendar day has timezone-boundary edge cases that
+  are easy to get subtly wrong. It's now bounded: the query filters to
+  `[localDate - 24h, localDate + 48h]` (i.e. a full day of padding on
+  each side of the requested local day), converted to UTC before use
+  in the query, same `->setTimezone('UTC')` discipline as everywhere
+  else a local Carbon instance needs to hit a UTC-stored column. 24
+  hours per side is deliberately generous rather than an exact
+  boundary — the widest real-world UTC offset is +14:00 (Kiribati) to
+  -12:00 (Baker Island), so a full day's padding on each side covers
+  every timezone (and any DST shift within it) with room to spare,
+  without computing or special-casing an exact offset per timezone.
+  Over-padding costs a handful of extra rows fetched; under-padding
+  risks silently excluding a genuinely overlapping appointment, which
+  is the one outcome this can't allow — the trade deliberately favors
+  width. `bookedIntervals()` now takes the already-computed
+  `$localDate` as a third parameter to build this window. Proven by a
+  new case in `AvailabilitySlotCalculatorTest`
+  (`...excluded_by_a_bounded_query`) that does two things, not just
+  one: confirms results are still correct with appointments weeks
+  away, *and* inspects the actual logged SQL (`DB::enableQueryLog()`)
+  to confirm the appointments query now filters by `starts_at`/
+  `ends_at` at all — proving the query is actually bounded, not just
+  that results happen to still come out right.
 - Covered by `tests/Unit/AvailabilitySlotCalculatorTest.php` — no
   HTTP, no controllers (uses `Tests\TestCase` + `RefreshDatabase` only
   because the service reads real Eloquent relations). Cases: a single
@@ -340,18 +355,77 @@ GitHub: mohit-coded/tech-crm (private), main branch
   Eloquent's datetime cast stores whatever timezone the Carbon
   instance already holds rather than converting for you (see the
   `starts_at`/`ends_at` comment on `Appointment`).
-- **Known concurrency limitation, accepted for this pass:** the
-  re-validation above closes the "page was loaded a while ago, slot
-  got taken since" case, but not true simultaneous writes — two
-  requests can both pass the "is this slot still available" read at
-  the same instant and both proceed to create an `Appointment` for it,
-  since there's no DB-level constraint stopping that and no row lock
-  taken during the check. Future hardening: a unique constraint on
-  `(calendar_id, starts_at)` scoped to non-cancelled appointments (a
-  partial/filtered unique index, since `cancelled` rows must be
-  allowed to coexist with a new booking at the same time), or a
-  pessimistic lock (`lockForUpdate()`) held across the re-check and
-  the `Appointment::create()` inside `confirmBooking()`'s transaction.
+- **Concurrency limitation from the original pass — now closed
+  (booking-engine hardening pass), via two layers, not one:** the
+  re-validation above only ever closed the "page was loaded a while
+  ago, slot got taken since" case — a plain read, so two requests
+  could still both pass it at the exact same instant and both proceed
+  to create an `Appointment` for it. Both pieces of the "future
+  hardening" this note used to flag are now actually in place:
+  1. **A pessimistic lock**, inside `confirmBooking()`'s
+     `DB::transaction()`, right before `Appointment::create()`: locks
+     every non-cancelled `Appointment` on this calendar overlapping
+     the exact slot being booked (`->lockForUpdate()`), then does the
+     real overlap check against *that* locked result — not the
+     calculator's earlier, pre-lock one. A concurrent request racing
+     this one either blocks until this transaction commits (then
+     correctly sees the row just inserted and bails out), or —
+     **critically** — finds nothing to lock yet and proceeds anyway,
+     if this is a genuinely first booking of that slot with no prior
+     row for either transaction to lock. That gap is what layer 2
+     closes.
+  2. **A DB-level unique index**, added via migration, on
+     `(calendar_id, starts_at)` scoped to non-cancelled appointments —
+     the backstop for exactly that "nothing exists yet to lock" case.
+     Neither database this app runs on (MySQL in production, SQLite
+     for local/tests — see `config/database.php`) supports a true
+     partial/filtered unique index (Postgres/SQL Server's
+     `UNIQUE (...) WHERE status <> 'cancelled'` has no MySQL/SQLite
+     equivalent), so it's emulated the portable way both actually
+     support: a generated column, `active_slot_marker`, that evaluates
+     to `1` for a non-cancelled appointment and `NULL` for a cancelled
+     one, included in a composite unique index alongside
+     `(calendar_id, starts_at)`. NULL is never considered equal to
+     another NULL for unique-index purposes on either database, so any
+     number of cancelled appointments can freely share a slot while
+     two non-cancelled ones for the same slot collide and the second
+     `INSERT` is rejected. **Explicitly not** a plain unique index on
+     `(calendar_id, starts_at, status)` — that's not equivalent and
+     would be a bug: `status` being part of the key there means only
+     two appointments with the *exact same* status value would
+     collide, so a `'requested'` and a `'confirmed'` row for the same
+     slot could still coexist. The second `Appointment::create()`
+     losing this race surfaces as Laravel's own
+     `Illuminate\Database\UniqueConstraintViolationException`
+     (driver-portable — both `MySqlConnection` and `SQLiteConnection`
+     detect their own driver's unique-violation error and Laravel
+     throws this specific subclass of `QueryException` for it), caught
+     in `confirmBooking()` alongside a new
+     `App\Exceptions\AppointmentSlotUnavailableException` (thrown by
+     the lockForUpdate() check above) and converted to the same
+     user-facing "that time was just booked" redirect either way.
+  Covered by `tests/Unit/AppointmentActiveSlotUniqueIndexTest.php`
+  (bypasses the booking flow entirely — `Appointment::create()` called
+  directly, twice — to prove the constraint itself works,
+  independent of the application-level lock: two non-cancelled
+  appointments for the same calendar/start time collide; a
+  `'requested'` and a `'confirmed'` one for the same slot *also*
+  collide, proving the `(calendar_id, starts_at, status)` shortcut
+  really would have been wrong; a cancelled appointment never blocks
+  reusing its slot; a different calendar or a different start time
+  never collides) and a new case in `FunnelBookingTest`
+  (`...runs_a_locked_overlap_check_before_creating_the_appointment`)
+  that confirms a normal booking still succeeds with the lock in place
+  and that the locked query actually runs — and, since SQLite compiles
+  `lockForUpdate()` to a silent no-op (it has no row-level locking
+  syntax; see `Illuminate\Database\Query\Grammars\SQLiteGrammar::
+  compileLock()`), separately compiles the identical query shape
+  against a real `MySqlGrammar` to confirm `FOR UPDATE` is actually
+  emitted for the production driver, since that can't be observed
+  against the local/test one. The already-existing race test (slot
+  taken between page load and submission) still passes unmodified,
+  now backed by an actual database-enforced guarantee rather than just
+  the softer re-validation read.
 - Contact/Appointment creation, and the Opportunity stage move, all
   run inside one `DB::transaction()`. `confirmBooking()` looks up the
   lead's existing `Opportunity` (by `location_id` + `contact_id`) and,
