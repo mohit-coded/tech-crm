@@ -150,7 +150,7 @@ below.
   specifically to confirm nothing *functional* broke, and passed
   unmodified otherwise.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open. Phase 9 complete, closing out the roadmap's "FB Lead Ads + Google Business integrations" as originally scoped: OAuth connection infrastructure for Facebook/Google (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`, Stage 1), the Facebook Lead Ads webhook — verification handshake, signature-verified lead delivery, and Contact/Opportunity creation via the newly-shared `CapturesLeads` service (Stage 2) — and Google Business Profile connection with best-effort review-link auto-fill (Stage 3) — see below. **Overall unverified status, spanning Phases 5 and 9:** every real third-party integration built so far — `TwilioSmsSender` (Phase 5a), `FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` (Phase 9 Stage 1), `FacebookLeadsClientImpl` (Stage 2), and `GoogleBusinessProfileClientImpl` (Stage 3) — is built to its respective provider's documented API shape and tested thoroughly against a fake, but **none of the five has ever actually been exercised against real developer credentials**. That verification pass, across all five, is the natural next step before any of this goes live for a real business — not a per-integration afterthought, a single remaining milestone this whole set of features is blocked on.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 in progress: basic Dashboard built with real data, then Stage 1 (Conversion Rate + date range filtering, `?range=` selector) complete — see below; Stages 2-4 (lead source breakdown, campaign performance, appointment funnel) still open. Phase 9 complete, closing out the roadmap's "FB Lead Ads + Google Business integrations" as originally scoped: OAuth connection infrastructure for Facebook/Google (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`, Stage 1), the Facebook Lead Ads webhook — verification handshake, signature-verified lead delivery, and Contact/Opportunity creation via the newly-shared `CapturesLeads` service (Stage 2) — and Google Business Profile connection with best-effort review-link auto-fill (Stage 3) — see below. **Overall unverified status, spanning Phases 5 and 9:** every real third-party integration built so far — `TwilioSmsSender` (Phase 5a), `FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` (Phase 9 Stage 1), `FacebookLeadsClientImpl` (Stage 2), and `GoogleBusinessProfileClientImpl` (Stage 3) — is built to its respective provider's documented API shape and tested thoroughly against a fake, but **none of the five has ever actually been exercised against real developer credentials**. That verification pass, across all five, is the natural next step before any of this goes live for a real business — not a per-integration afterthought, a single remaining milestone this whole set of features is blocked on.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -1167,8 +1167,88 @@ below.
   shows only that location's counts/values/stages/recents — i.e. it
   verifies the scope actually isolates dashboard data across tenants,
   not just that the numbers render.
-- Broader reporting (beyond this basic dashboard) is still open under
-  Phase 8.
+- Broader reporting (beyond this basic dashboard) continued in Stage 1
+  below; Stages 2-4 are still open (see that note).
+
+### Dashboard: Conversion Rate + date range filtering (Phase 8, Stage 1)
+- **`?range=` query param** (`7d`/`30d`/`90d`/`all`) controls the
+  window most of the dashboard's numbers are computed over. Validated
+  against a fixed whitelist (`DashboardController::VALID_RANGES`) —
+  anything missing or not one of those four exact strings **silently
+  falls back to `30d`** rather than erroring, same "don't blow up on a
+  bad value, just use the safe default" posture as the rest of this
+  app's defensive validation. `all` is a real "no lower bound" case,
+  implemented as a conditional `where` added via `when($rangeStart !==
+  null, ...)` rather than some very-old sentinel date — so selecting
+  "All" genuinely queries the whole table with no date predicate at
+  all, not a predicate that just happens to match everything.
+- **Deliberate split: two cards stay current-state snapshots, the rest
+  became range-scoped — and this is intentional, not inconsistent.**
+  Open-opportunity count and pipeline value are **not** filtered by
+  `opportunities.created_at` even though a range selector is now on
+  the same page. Reasoning: those two cards answer "what's sitting in
+  my pipeline right now, unclosed" — an open opportunity is exactly as
+  real and exactly as much a business's live pipeline whether it was
+  created yesterday or four months ago, so scoping them to "created
+  within the selected range" would make them answer a different,
+  worse question ("how much did I create recently") and could
+  actively mislead an owner into thinking older-but-still-open deals
+  had vanished from the count just because they picked "7d". The new
+  Conversion Rate card, the stage breakdown, and the recent-
+  opportunities list, by contrast, are inherently about activity
+  *within* a window — a conversion rate with no time boundary isn't a
+  rate over anything meaningful — so those three are the ones scoped
+  by the range selector. This split is documented directly as a code
+  comment on `DashboardController::index()` so it reads as a decision,
+  not an oversight, the next time this page is touched.
+- **Conversion rate** = won-in-range / total-in-range as a percentage,
+  rounded to 1 decimal, with an explicit `$totalInRange > 0` guard
+  before dividing — 0 (not an error, not `NAN`/`INF`) when there are
+  no opportunities in the selected range at all.
+- **All three range-scoped queries clone one shared base query
+  builder** (`$rangedOpportunities = Opportunity::when($rangeStart !==
+  null, fn ($query) => $query->where('opportunities.created_at', '>=',
+  $rangeStart))`), the same "build once, clone per use" shape already
+  established for the open-opportunities query in the original basic
+  dashboard. `totalInRange`/`wonInRange`, the stage breakdown, and the
+  recent-opportunities list are each a `clone` of it with their own
+  additional filtering/joins/limits layered on — so the actual range
+  boundary logic exists in exactly one place.
+- **Ambiguous-column bug caught during development, and the reusable
+  lesson in how it was fixed:** an early version applied the range
+  filter as a bare `where('created_at', '>=', $rangeStart)` on the
+  shared base query. That's fine on its own, but the stage-breakdown
+  clone additionally `join`s `pipeline_stages` — which has its *own*
+  `created_at` column — so by the time that clone actually ran, the
+  database saw two `created_at` columns in scope and threw `SQLSTATE
+  [HY000]: ... ambiguous column name: created_at` (only on that one
+  clone; the count and recent-opportunities clones, which never join
+  anything, worked fine, which is what made this easy to miss without
+  running the full dashboard). The fix was qualifying it once, at the
+  point the filter is built on the *shared* base query —
+  `opportunities.created_at` instead of bare `created_at` — rather
+  than patching the stage-breakdown clone alone. Because every
+  range-scoped query is a clone of that one shared builder, qualifying
+  the column a single time there fixed every current and future clone
+  at once; fixing it only on the clone that happened to break would
+  have left the same latent ambiguity ready to resurface the next time
+  a different clone added its own join against a table with a
+  same-named column.
+- Covered by `tests/Feature/DashboardTest.php`, extended with 5 new
+  cases: conversion rate computed correctly against a known
+  won/open/lost mix within the range; the zero-opportunities-in-range
+  case not dividing by zero; an invalid `?range=` value falling back
+  to `30d`; an opportunity created outside the selected range excluded
+  from `totalInRange` and the recent-opportunities list; and a
+  tenant-isolation case reusing the existing two-location pattern, now
+  with overlapping `created_at` dates and a deliberately lopsided
+  opportunity volume between the two locations, to prove the new range
+  filter doesn't introduce a fresh cross-tenant leak alongside the
+  existing scope-isolation guarantee.
+- **Phase 8 Stages 2-4 (lead source breakdown, campaign performance,
+  appointment funnel) remain open** — this stage only covers
+  conversion rate and date-range filtering on top of the existing
+  basic dashboard.
 
 ### Facebook Lead Ads webhook (Phase 9, Stage 2)
 - Builds on Phase 9 Stage 1's OAuth connection infrastructure
