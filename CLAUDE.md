@@ -35,7 +35,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
 - **Stale-relation gotcha (hit building `EnrollContactsOnStageEntry`, Phase 6 Stage 3):** after calling a method that updates a model's own attribute in place — `moveToStage()` updating `pipeline_stage_id` via `$this->update()` is the concrete case — don't trust an already-accessed relation on that *same in-memory instance* anywhere later in the same request/listener/job chain, even indirectly (e.g. the same object reused across two dispatches of the same event). Eloquent caches a `BelongsTo`/etc. relation the first time it's accessed and `update()` doesn't invalidate that cache, so `$model->someRelation` can keep returning the pre-update related row instead of the one the updated foreign key now points to. This bit the listener directly: it read `$opportunity->stage?->name` to get the newly-entered stage's name, but on a `moveToStage()` call that stage relation had already been cached (from `stage_id` before the move) by an earlier access — e.g. the same listener already having run once for that opportunity's *creation* — so it silently read the stage being moved *out of* instead of the one moved *into*. The fix, and the reusable lesson: look the related row up fresh by the id you actually have in hand (here, `PipelineStage::find($event->newStageId)`) rather than walking a relation off a model instance whose attributes changed underneath it — `$model->fresh()->someRelation` also works, but a direct fresh `Model::find($id)` on the id you already have is simpler when you don't need the rest of the model reloaded too. Caught by `CampaignTriggerTest`'s `moveToStage()` case failing against a listener that looked correct in isolation — worth remembering any time an event fired *after* an in-place `update()` needs to read the post-update related state through a relation.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open. Phase 9 Stage 1 built OAuth connection infrastructure for Facebook/Google (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`). Phase 9 Stage 2 complete: the Facebook Lead Ads webhook — verification handshake, signature-verified lead delivery, and Contact/Opportunity creation via the newly-shared `CapturesLeads` service — see below; both `FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` (Stage 1) and `FacebookLeadsClientImpl` (Stage 2) are built to spec but unverified against real Facebook/Google developer credentials, same situation Twilio was in during Phase 5a. Google Business Profile integration (the other half of Phase 9) is still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -170,12 +170,20 @@ GitHub: mohit-coded/tech-crm (private), main branch
   ...)->where('is_published', true)->firstOrFail()` — bypassing the
   scope because there's no `Auth::user()` for it to key off anyway —
   and 404s equally for an unpublished or a nonexistent slug, so a
-  slug's existence is never leaked either way. From there, the new
-  `Contact` and the `Opportunity` it creates both set `location_id`
-  explicitly from `$funnel->location_id`, and the `Pipeline` lookup
-  (the location's default pipeline, falling back to its first
-  pipeline) is filtered by `location_id` explicitly too — none of
-  that scoping is automatic on this route.
+  slug's existence is never leaked either way.
+- **`store()` no longer contains the Contact/Pipeline/Opportunity
+  creation logic directly — as of Phase 9 Stage 2, it delegates to
+  `App\Services\CapturesLeads::capture()`.** That logic (the
+  location's default pipeline, falling back to its first pipeline;
+  placing the new `Opportunity` on that pipeline's first stage; the
+  explicit `location_id` on both rows since there's no authenticated
+  user for `BelongsToLocation`'s scope/auto-fill to key off) still
+  behaves exactly as before for this caller — `store()` just calls
+  `app(CapturesLeads::class)->capture($funnel->location_id,
+  $validated['name'], $validated['email'], $validated['phone'],
+  $funnel->name)` now instead of inlining it. See the `CapturesLeads`
+  entry under Phase 9 Stage 2 below for why this moved and what the
+  shared service actually does.
 - Covered by `tests/Feature/FunnelControllerTest.php` (admin CRUD
   tenant isolation, same shape as `ContactControllerTest`) and
   `tests/Feature/FunnelPublicControllerTest.php` (published vs.
@@ -1046,3 +1054,148 @@ GitHub: mohit-coded/tech-crm (private), main branch
   not just that the numbers render.
 - Broader reporting (beyond this basic dashboard) is still open under
   Phase 8.
+
+### Facebook Lead Ads webhook (Phase 9, Stage 2)
+- Builds on Phase 9 Stage 1's OAuth connection infrastructure
+  (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`,
+  lazily bound the same way `SmsSender` is) — a `ConnectedAccount`
+  with `provider: 'facebook'` and its stored `access_token` is what
+  this stage actually uses to fetch a lead's data once notified.
+- **`GET /webhooks/facebook/leads`** (`FacebookWebhookController@verify`)
+  is the one-time verification handshake Facebook performs when the
+  webhook subscription is configured — public, no auth, no signature
+  check (there's no payload to sign yet; this is how Facebook confirms
+  it's reaching this app at all). Compares the request's verify token
+  against `config('services.facebook_ads.webhook_verify_token')` with
+  `hash_equals()` and, on a match, echoes back the challenge as plain
+  text (not JSON — Facebook expects the raw string). **Gotcha this
+  relies on and documents in code:** Facebook's documented query
+  params use literal dots (`hub.mode`, `hub.verify_token`,
+  `hub.challenge`), but PHP renames dots (and spaces) in top-level
+  GET/POST parameter names to underscores while parsing the query
+  string — a long-standing PHP quirk (`parse_str()`'s own behavior,
+  not Laravel's) — so by the time a `Request` exists they're already
+  `hub_mode`/`hub_verify_token`/`hub_challenge`. Reading the literal
+  dotted names would silently always return null and this handshake
+  would always fail. Proven, not just asserted: the test constructs
+  the request URL with literal dots to match what Facebook actually
+  sends.
+- **`VerifyFacebookSignature`** (aliased `facebook.signature`, applied
+  only to the POST route — the GET verification route needs no
+  signature, a different check entirely) mirrors `VerifyTwilioSignature`'s
+  shape closely: computes an HMAC-SHA256 of the *raw* request body
+  (`$request->getContent()` — not the parsed input array, since that's
+  what Facebook itself signs and since `TrimStrings`/
+  `ConvertEmptyStringsToNull` only touch parsed input, never the raw
+  body) using `config('services.facebook_ads.app_secret')`, strips the
+  `sha256=` prefix from the `X-Hub-Signature-256` header, and compares
+  with `hash_equals()` — aborting 403 before any other logic on a
+  missing/invalid signature. Also excluded from Laravel's CSRF
+  validation in `bootstrap/app.php`, same reasoning as the Twilio
+  webhook route (no Laravel CSRF token on either provider's POST).
+- **`services.facebook_ads.app_secret` intentionally reads the same
+  env var as `client_secret` (`FACEBOOK_ADS_CLIENT_SECRET`) from Stage
+  1, not a second one.** In Facebook's own system there is only one
+  "App Secret" credential per app — used both for the OAuth token
+  exchange (as `client_secret`) and for signing webhook payloads (what
+  `app_secret` verifies here). A separate env var for what's
+  conceptually the identical real-world value would just be a second
+  place for it to be set, with nothing stopping the two from drifting
+  out of sync. Still given its own config key, though, rather than
+  reading `client_secret` directly at the signature-verification call
+  site — `app_secret` names what that usage actually is, even though
+  the underlying value is shared. `webhook_verify_token` is unrelated
+  to either — not a Facebook-issued secret at all, but a value this
+  app invents and sets in both `config/services.php` and the Facebook
+  App dashboard's webhook subscription config.
+- **`App\Services\Facebook\FacebookLeadsClient`** (interface) /
+  `FacebookLeadsClientImpl` (real implementation) — same
+  interface-behind-a-lazy-singleton template as `SmsSender`/
+  `FacebookOAuthClient`. `fetchLead(string $leadgenId, string
+  $accessToken): FacebookLeadData` calls the documented Graph API
+  `GET /{leadgen-id}` endpoint (with the connected Page's own access
+  token — Lead Ads data can only be read with a token for the Page the
+  form belongs to) and parses its `field_data` array (a list of
+  `{name, values: [...]}` pairs) into a `FacebookLeadData` value
+  object (`leadgenId`, nullable `name`/`email`/`phone`, `pageId`).
+  **Field-name matching is deliberately non-exhaustive, not a bug to
+  fix later:** a Lead Ad form's fields are fully customizable in the
+  Facebook Ads dashboard, so there's no single guaranteed field name
+  for "the name field" etc. Only Facebook's own common/default field
+  names are recognized, case-insensitively — `full_name` or `name` for
+  the name, `email` for email, `phone_number` or `phone` for phone —
+  and a value is left `null` if none of those match, rather than
+  guessing at an arbitrary or custom field key. Handling truly
+  arbitrary per-form field mapping would need its own configuration UI
+  and is explicitly out of scope for this stage.
+- **`FacebookLeadsClientImpl` is UNVERIFIED against a real Facebook
+  Lead Ad — no developer credentials exist for this project yet**,
+  same situation and same reasoning as `FacebookOAuthClientImpl`/
+  `GoogleOAuthClientImpl` (Stage 1) and Twilio's own outbound-SMS note
+  in Phase 5a. It's built to Facebook's documented API shape but has
+  never actually completed a real call. No test constructs or resolves
+  it — `Tests\Fakes\FakeFacebookLeadsClient` is bound in its place for
+  every test that touches the webhook, so nothing here can
+  accidentally reach the real Graph API.
+- **`FacebookWebhookController@leads`** parses Facebook's documented
+  Lead Ads webhook payload shape — `entry[].changes[]` where
+  `changes[].field === 'leadgen'`, with `leadgen_id`/`page_id` inside
+  `changes[].value` (a single delivery can legitimately batch multiple
+  entries/changes, so this loops over all of them). For each one, looks
+  up `ConnectedAccount::where('provider', 'facebook')->where('external_account_id',
+  $pageId)->first()` — **explicit filtering, not any scope**, since
+  there's no authenticated user on this public webhook route, same
+  reasoning as every other public route's tenant lookup in this app.
+  No match → returns (empty 200, no error) without processing that
+  entry — same "unrecognized number" reasoning as
+  `TwilioWebhookController`: not every `page_id` Facebook might send
+  belongs to a location using this app, and it's not a transient
+  failure worth Facebook retrying. On a match, fetches the lead via
+  `FacebookLeadsClient` using the connected account's own stored
+  `access_token`, then calls `CapturesLeads::capture()` (see next
+  bullet) with `source: 'Facebook Lead Ad'`.
+- **`App\Services\CapturesLeads` (new): the Contact+Opportunity
+  creation logic extracted out of `FunnelPublicController@store`
+  (Phase 3) the moment this webhook needed the exact same logic a
+  second time.** Two genuine, already-existing call sites doing
+  identical multi-step domain logic (the default-pipeline-fallback-to-
+  first lookup, placing the new `Opportunity` on that pipeline's first
+  stage) is a real duplication problem worth fixing immediately, not a
+  speculative future one — extracting it now means a future change to
+  that fallback logic only has to be made, and tested, in one place.
+  `capture(int $locationId, ?string $name, ?string $email, ?string
+  $phone, string $source): Contact` takes every value as an **explicit
+  parameter** — no implicit `Auth::user()`/`BelongsToLocation`
+  auto-fill reliance, since neither of this service's current callers
+  (a public funnel form, a public Facebook webhook) has an
+  authenticated user. Wraps its own `DB::transaction()` internally
+  (moved from being the caller's responsibility) so every caller,
+  including any future one, gets the same atomicity for free rather
+  than needing to remember to wrap it themselves. **The
+  `first_name` fallback chain — `$name ?? $email ?? $phone ?? 'Unknown
+  Lead'` — exists specifically for this stage:** `contacts.first_name`
+  is a `NOT NULL` column, and `FunnelPublicController`'s own form
+  validation guarantees `$name` is never null for that caller (so the
+  fallback is inert there, preserving Phase 3's exact original
+  behavior), but a Facebook Lead Ad form can omit a name field
+  entirely — falling back to email, then phone, then a generic label
+  keeps the insert from failing just because one field wasn't
+  collected, rather than erroring.
+- Covered by `tests/Feature/FacebookWebhookTest.php`: GET verification
+  with the correct token (echoes the challenge) and the wrong token
+  (403); a valid signature with a matching connected page creates a
+  `Contact` + `Opportunity` with the correct `location_id`, fetched via
+  the fake client using the connected account's own access token; **an
+  invalid or missing signature is rejected and creates nothing** (the
+  critical one, same rigor as the Twilio equivalent) — the fake Graph
+  API client is never even called; a valid signature with an
+  unrecognized `page_id` does nothing and returns 200; two locations
+  with different connected pages — a lead for location A's page never
+  creates data under location B, even with contrived overlapping lead
+  data (same name/email used for both); and a lead missing name/phone
+  (only email present) still creates a `Contact`, with `first_name`
+  falling back to the email rather than erroring on the `NOT NULL`
+  column. `FunnelPublicControllerTest`/`FunnelBookingTest` (all 25
+  cases) were re-run against the `CapturesLeads` extraction and pass
+  unmodified, confirming the funnel path's behavior is byte-for-byte
+  unchanged.
