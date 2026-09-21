@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Campaign;
+use App\Models\PipelineStage;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\View\View;
 
 class CampaignController extends Controller
@@ -23,7 +25,7 @@ class CampaignController extends Controller
 
     public function create(): View
     {
-        return view('campaigns.create');
+        return view('campaigns.create', ['stageNames' => $this->stageNames()]);
     }
 
     public function store(Request $request): RedirectResponse
@@ -40,7 +42,10 @@ class CampaignController extends Controller
     {
         $campaign->load('steps');
 
-        return view('campaigns.edit', ['campaign' => $campaign]);
+        return view('campaigns.edit', [
+            'campaign' => $campaign,
+            'stageNames' => $this->stageNames(),
+        ]);
     }
 
     public function update(Request $request, Campaign $campaign): RedirectResponse
@@ -70,6 +75,21 @@ class CampaignController extends Controller
         $campaign->delete();
 
         return redirect()->route('campaigns.index')->with('status', __('Campaign deleted.'));
+    }
+
+    /**
+     * Distinct pipeline stage names across the current location's
+     * pipelines, for the trigger_event dropdown. Relies on PipelineStage's
+     * whereHas('pipeline') to inherit Pipeline's own BelongsToLocation
+     * scope (a global scope applies to the related model's query inside
+     * whereHas() the same as anywhere else) — no manual location_id
+     * filtering needed here, same as the rest of this controller.
+     *
+     * @return Collection<int, string>
+     */
+    private function stageNames(): Collection
+    {
+        return PipelineStage::whereHas('pipeline')->distinct()->orderBy('name')->pluck('name');
     }
 
     /**

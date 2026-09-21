@@ -13,7 +13,7 @@ class OpportunityStageChanged
 
     public function __construct(
         public Opportunity $opportunity,
-        public int $oldStageId,
+        public ?int $oldStageId,
         public int $newStageId,
     ) {}
 }

@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Events\OpportunityStageChanged;
+use App\Listeners\EnrollContactsOnStageEntry;
 use App\Services\SmsSender;
 use App\Services\TwilioSmsSender;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Twilio\Rest\Client;
 
@@ -30,6 +33,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Registered explicitly rather than relying on Laravel's
+        // app/Listeners auto-discovery — this app's bootstrap/app.php
+        // never calls ->withEvents(), so discovery isn't active.
+        Event::listen(OpportunityStageChanged::class, EnrollContactsOnStageEntry::class);
     }
 }

@@ -62,6 +62,22 @@ class Opportunity extends Model
     }
 
     /**
+     * Creating an Opportunity with an initial stage counts as "entering"
+     * that stage, same as a later moveToStage() call — dispatched with a
+     * null old stage id so trigger-engine listeners (see
+     * EnrollContactsOnStageEntry) fire on both paths without every
+     * creation call site needing to know about it.
+     */
+    protected static function booted(): void
+    {
+        static::created(function (Opportunity $opportunity) {
+            if ($opportunity->pipeline_stage_id) {
+                OpportunityStageChanged::dispatch($opportunity, null, $opportunity->pipeline_stage_id);
+            }
+        });
+    }
+
+    /**
      * The only sanctioned way to change stage — raw attribute updates
      * elsewhere would silently skip the OpportunityStageChanged event.
      */
