@@ -6,6 +6,10 @@ use App\Events\AppointmentCompleted;
 use App\Events\OpportunityStageChanged;
 use App\Listeners\EnrollContactsOnAppointmentCompletion;
 use App\Listeners\EnrollContactsOnStageEntry;
+use App\Services\OAuth\FacebookOAuthClient;
+use App\Services\OAuth\FacebookOAuthClientImpl;
+use App\Services\OAuth\GoogleOAuthClient;
+use App\Services\OAuth\GoogleOAuthClientImpl;
 use App\Services\SmsSender;
 use App\Services\TwilioSmsSender;
 use Illuminate\Support\Facades\Event;
@@ -28,6 +32,14 @@ class AppServiceProvider extends ServiceProvider
                 config('services.twilio.token')
             ));
         });
+
+        // Same lazy-singleton-behind-an-interface template as SmsSender
+        // above — tests bind Tests\Fakes\FakeFacebookOAuthClient /
+        // FakeGoogleOAuthClient in place of these before anything
+        // resolves the interface, so no test can accidentally reach a
+        // real endpoint.
+        $this->app->singleton(FacebookOAuthClient::class, fn () => new FacebookOAuthClientImpl());
+        $this->app->singleton(GoogleOAuthClient::class, fn () => new GoogleOAuthClientImpl());
     }
 
     /**

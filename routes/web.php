@@ -3,6 +3,7 @@
 use App\Http\Controllers\AppointmentController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\CampaignController;
+use App\Http\Controllers\ConnectedAccountController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DashboardController;
@@ -38,6 +39,30 @@ Route::middleware('auth')->group(function () {
     // tenant-safe by construction.
     Route::get('/settings', [LocationSettingsController::class, 'edit'])->name('settings.location.edit');
     Route::put('/settings', [LocationSettingsController::class, 'update'])->name('settings.location.update');
+
+    // connect()/callback() stay inside 'auth' rather than being public
+    // like the Twilio webhook: this is a browser-driven redirect flow,
+    // not a server-to-server one. The same browser session that starts
+    // it at connect() is the one the provider redirects back to
+    // callback() — an external redirect in between doesn't clear our
+    // session cookie, since cookies are scoped to our own domain, not
+    // the referring one — so Auth::user() is still available exactly
+    // when callback() needs it to know which location to attach the
+    // connection to (unlike the Twilio webhook, nothing else tells us
+    // that here). If the session genuinely did expire mid-flow, 'auth'
+    // correctly bounces to login rather than the controller having to
+    // guess a location — the right behavior either way. The 'state'
+    // param (see ConnectedAccountController::connect()) is a separate
+    // concern from this — it guards against a forged/replayed callback,
+    // not against the lack of a session.
+    Route::get('/connected-accounts/{provider}/connect', [ConnectedAccountController::class, 'connect'])
+        ->whereIn('provider', ['facebook', 'google'])
+        ->name('connected-accounts.connect');
+    Route::get('/connected-accounts/{provider}/callback', [ConnectedAccountController::class, 'callback'])
+        ->whereIn('provider', ['facebook', 'google'])
+        ->name('connected-accounts.callback');
+    Route::delete('/connected-accounts/{connectedAccount}', [ConnectedAccountController::class, 'disconnect'])
+        ->name('connected-accounts.disconnect');
 
     Route::resource('contacts', ContactController::class)->except('show');
 

@@ -41,4 +41,14 @@ return [
         'phone_number' => env('TWILIO_PHONE_NUMBER'),
     ],
 
+    'facebook_ads' => [
+        'client_id' => env('FACEBOOK_ADS_CLIENT_ID'),
+        'client_secret' => env('FACEBOOK_ADS_CLIENT_SECRET'),
+    ],
+
+    'google_business' => [
+        'client_id' => env('GOOGLE_BUSINESS_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_BUSINESS_CLIENT_SECRET'),
+    ],
+
 ];
