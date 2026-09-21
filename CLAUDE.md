@@ -33,8 +33,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 - **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
 - **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
+- **Stale-relation gotcha (hit building `EnrollContactsOnStageEntry`, Phase 6 Stage 3):** after calling a method that updates a model's own attribute in place — `moveToStage()` updating `pipeline_stage_id` via `$this->update()` is the concrete case — don't trust an already-accessed relation on that *same in-memory instance* anywhere later in the same request/listener/job chain, even indirectly (e.g. the same object reused across two dispatches of the same event). Eloquent caches a `BelongsTo`/etc. relation the first time it's accessed and `update()` doesn't invalidate that cache, so `$model->someRelation` can keep returning the pre-update related row instead of the one the updated foreign key now points to. This bit the listener directly: it read `$opportunity->stage?->name` to get the newly-entered stage's name, but on a `moveToStage()` call that stage relation had already been cached (from `stage_id` before the move) by an earlier access — e.g. the same listener already having run once for that opportunity's *creation* — so it silently read the stage being moved *out of* instead of the one moved *into*. The fix, and the reusable lesson: look the related row up fresh by the id you actually have in hand (here, `PipelineStage::find($event->newStageId)`) rather than walking a relation off a model instance whose attributes changed underneath it — `$model->fresh()->someRelation` also works, but a direct fresh `Model::find($id)` on the id you already have is simpler when you don't need the rest of the model reloaded too. Caught by `CampaignTriggerTest`'s `moveToStage()` case failing against a listener that looked correct in isolation — worth remembering any time an event fired *after* an in-place `update()` needs to read the post-update related state through a relation.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 Stage 1 complete: Campaigns data model + admin CRUD — see below. Phase 6 Stage 2 complete: the execution engine that walks an already-created `CampaignEnrollment` through its steps (`SendCampaignStep` job + `EnrollsContacts` service) — see below; trigger/auto-enrollment (Stage 3) is still open, so nothing in the app calls `enroll()` yet. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -655,11 +656,12 @@ GitHub: mohit-coded/tech-crm (private), main branch
   completely untouched.
 
 ### Campaigns (Phase 6, Stage 2 — execution engine, complete)
-- **Still no trigger/auto-enrollment (Stage 3).** This stage only
-  builds the machinery to walk an *already-created*
-  `CampaignEnrollment` through its campaign's steps — nothing yet
-  calls `enroll()` on its own. `trigger_event` remains an inert
-  string field until Stage 3 wires it to a real event listener.
+- **No trigger/auto-enrollment as of this stage** — that's Stage 3,
+  below, which is now also complete. This stage only builds the
+  machinery to walk an *already-created* `CampaignEnrollment` through
+  its campaign's steps — nothing built in *this* stage calls
+  `enroll()` on its own. `trigger_event` was still an inert string
+  field until Stage 3 wired it to a real event listener.
 - `App\Services\EnrollsContacts::enroll(Contact $contact, Campaign
   $campaign): CampaignEnrollment` creates the enrollment (`status:
   'active'`, `location_id` set explicitly from `$campaign->location_id`
@@ -711,6 +713,92 @@ GitHub: mohit-coded/tech-crm (private), main branch
   `handle()`; `cancel()` sets `status: 'cancelled'`; and `enroll()`
   sets `location_id` explicitly when called with no authenticated
   user at all (proving it doesn't blow up or silently omit it).
+
+### Campaigns (Phase 6, Stage 3 — trigger engine, complete; closes Phase 6)
+- Auto-enrollment: a `Contact` is enrolled into a matching `Campaign`
+  automatically when their `Opportunity` enters a pipeline stage whose
+  name matches that campaign's `trigger_event`. Nothing manual is
+  needed at either the creation or move-to-stage call site — see the
+  next two bullets for how both paths funnel into the same listener.
+- `Opportunity::booted()` (new) dispatches `OpportunityStageChanged($opportunity,
+  null, $opportunity->pipeline_stage_id)` from a `created()` hook
+  whenever a freshly-created `Opportunity` already has a
+  `pipeline_stage_id` — creating an opportunity with an initial stage
+  now counts as "entering" that stage, same as a later `moveToStage()`
+  call, so any code that creates an `Opportunity` with a stage (now or
+  in the future) fires the trigger-relevant event without that call
+  site needing to know about triggers at all. `OpportunityStageChanged.
+  oldStageId` is now `?int` (was `int`) to carry this `null` "no prior
+  stage" case; `moveToStage()`'s own dispatch is unchanged.
+- `App\Listeners\EnrollContactsOnStageEntry` (registered via
+  `Event::listen(OpportunityStageChanged::class, ...)` in
+  `AppServiceProvider::boot()` — **explicit registration, not
+  auto-discovery:** this app's `bootstrap/app.php` never calls
+  `->withEvents()`, so Laravel's `app/Listeners` auto-discovery isn't
+  active here, unlike a stock Laravel 11+ skeleton) handles both
+  dispatch paths with one code path: resolves the entered stage's name
+  (see the stale-relation gotcha in Conventions above for why this is
+  `PipelineStage::find($event->newStageId)->name`, not
+  `$opportunity->stage?->name`), builds
+  `"opportunity_stage:{stage name}"`, and looks up active `Campaign`s
+  in the opportunity's own `location_id` with exactly that
+  `trigger_event` — **name-based matching, not stage-id-based,**
+  consistent with the existing "Booking Requested"/"Booking Confirmed"
+  stage-lookup-by-name pattern elsewhere in the app (see
+  `FunnelPublicController`), not a new convention. Location filtering
+  is explicit via `Campaign::withoutGlobalScopes()->where('location_id',
+  $opportunity->location_id)`, not a reliance on `BelongsToLocation`'s
+  scope, since this listener may run with no authenticated user (a
+  queued job, a future non-HTTP trigger source) — same reasoning as
+  every other "queued job"/"public route" explicit-filter case in this
+  app. For each matching campaign, **the idempotency guard**: skips
+  (does not enroll again) if the opportunity's contact already has an
+  `active` `CampaignEnrollment` for that specific campaign — without
+  this, the same lead could be double-enrolled if this event ever
+  fires twice for the same transition. Otherwise calls
+  `EnrollsContacts::enroll($contact, $campaign)` (Stage 2's service,
+  unchanged).
+- **Admin form:** `trigger_event` on the campaign create/edit forms
+  (`resources/views/campaigns/_form.blade.php`) is now a `<select>` of
+  `"opportunity_stage:{name}"` options, not a free-text field — built
+  from `CampaignController::stageNames()`, the distinct pipeline stage
+  names across the current location's pipelines. That query
+  (`PipelineStage::whereHas('pipeline')->distinct()->orderBy('name')->pluck('name')`)
+  needs no manual `location_id` filtering: `whereHas('pipeline')`
+  applies `Pipeline`'s own `BelongsToLocation` global scope to the
+  subquery automatically, the same way a global scope applies anywhere
+  else — `PipelineStage` itself still has none of its own (unchanged
+  from the Phase 2 note above). If the location has no pipeline
+  stages at all yet, the dropdown is replaced with a plain explanatory
+  message rather than rendering empty/broken. The campaign's *current*
+  `trigger_event` value is always kept selectable even if it no longer
+  matches any known stage name (a renamed/deleted stage, or Stage 1
+  data predating this dropdown) — added specifically so opening and
+  re-saving an existing campaign unchanged can't silently rewrite its
+  trigger to a different value just because the dropdown didn't
+  recognize it.
+- Covered by `tests/Feature/CampaignTriggerTest.php`. The event-firing
+  case: creating an `Opportunity` with an initial stage dispatches
+  `OpportunityStageChanged` with `oldStageId === null` (via
+  `Event::fake([OpportunityStageChanged::class])`, same
+  only-fake-this-event pattern as `OpportunityTest`, to keep Eloquent's
+  own creating/saving events — and `BelongsToLocation`'s auto-fill —
+  working). The integration cases (no event faking, so the real
+  listener runs): a matching active campaign auto-enrolls the
+  contact on initial creation; **the same scenario but the contact
+  already has an active enrollment for that campaign creates no
+  second one** (the idempotency guard, the critical test here); moving
+  an opportunity via `moveToStage()` (not just fresh creation) also
+  correctly triggers a matching campaign — this is the test that
+  caught the stale-relation bug above; a campaign in a different
+  location with an exactly-matching `trigger_event` string is never
+  triggered by an opportunity in another location; and an inactive
+  campaign with a matching `trigger_event` enrolls no one. Plus two
+  view-smoke tests for the new dropdown: it renders
+  `opportunity_stage:{name}` options built from real pipeline stage
+  names on both the create and edit pages, and the create page shows
+  the empty-state message when the location has no pipeline stages
+  yet.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
