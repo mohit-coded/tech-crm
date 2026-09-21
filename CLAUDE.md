@@ -35,7 +35,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
 - **Stale-relation gotcha (hit building `EnrollContactsOnStageEntry`, Phase 6 Stage 3):** after calling a method that updates a model's own attribute in place — `moveToStage()` updating `pipeline_stage_id` via `$this->update()` is the concrete case — don't trust an already-accessed relation on that *same in-memory instance* anywhere later in the same request/listener/job chain, even indirectly (e.g. the same object reused across two dispatches of the same event). Eloquent caches a `BelongsTo`/etc. relation the first time it's accessed and `update()` doesn't invalidate that cache, so `$model->someRelation` can keep returning the pre-update related row instead of the one the updated foreign key now points to. This bit the listener directly: it read `$opportunity->stage?->name` to get the newly-entered stage's name, but on a `moveToStage()` call that stage relation had already been cached (from `stage_id` before the move) by an earlier access — e.g. the same listener already having run once for that opportunity's *creation* — so it silently read the stage being moved *out of* instead of the one moved *into*. The fix, and the reusable lesson: look the related row up fresh by the id you actually have in hand (here, `PipelineStage::find($event->newStageId)`) rather than walking a relation off a model instance whose attributes changed underneath it — `$model->fresh()->someRelation` also works, but a direct fresh `Model::find($id)` on the id you already have is simpler when you don't need the rest of the model reloaded too. Caught by `CampaignTriggerTest`'s `moveToStage()` case failing against a listener that looked correct in isolation — worth remembering any time an event fired *after* an in-place `update()` needs to read the post-update related state through a relation.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open. Phase 9 Stage 1 built OAuth connection infrastructure for Facebook/Google (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`). Phase 9 Stage 2 complete: the Facebook Lead Ads webhook — verification handshake, signature-verified lead delivery, and Contact/Opportunity creation via the newly-shared `CapturesLeads` service — see below; both `FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` (Stage 1) and `FacebookLeadsClientImpl` (Stage 2) are built to spec but unverified against real Facebook/Google developer credentials, same situation Twilio was in during Phase 5a. Google Business Profile integration (the other half of Phase 9) is still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open. Phase 9 complete, closing out the roadmap's "FB Lead Ads + Google Business integrations" as originally scoped: OAuth connection infrastructure for Facebook/Google (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`, Stage 1), the Facebook Lead Ads webhook — verification handshake, signature-verified lead delivery, and Contact/Opportunity creation via the newly-shared `CapturesLeads` service (Stage 2) — and Google Business Profile connection with best-effort review-link auto-fill (Stage 3) — see below. **Overall unverified status, spanning Phases 5 and 9:** every real third-party integration built so far — `TwilioSmsSender` (Phase 5a), `FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` (Phase 9 Stage 1), `FacebookLeadsClientImpl` (Stage 2), and `GoogleBusinessProfileClientImpl` (Stage 3) — is built to its respective provider's documented API shape and tested thoroughly against a fake, but **none of the five has ever actually been exercised against real developer credentials**. That verification pass, across all five, is the natural next step before any of this goes live for a real business — not a per-integration afterthought, a single remaining milestone this whole set of features is blocked on.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -1199,3 +1199,82 @@ GitHub: mohit-coded/tech-crm (private), main branch
   cases) were re-run against the `CapturesLeads` extraction and pass
   unmodified, confirming the funnel path's behavior is byte-for-byte
   unchanged.
+
+### Google Business Profile connection + auto review link (Phase 9, Stage 3; closes Phase 9)
+- **`App\Services\Google\GoogleBusinessProfileClient`** (interface) /
+  `GoogleBusinessProfileClientImpl` (real implementation) — same
+  interface-behind-a-lazy-singleton template as every other third-party
+  wrapper in this app. `fetchPrimaryLocation(string $accessToken):
+  ?GoogleLocationData` calls Google's My Business Account Management
+  API to list the connected account's accounts, then its My Business
+  Business Information API to list the first account's locations,
+  returning a `GoogleLocationData` (`placeId`, `locationName`) built
+  from the first location — or `null` if there are no locations at
+  all. **Deliberate v1 simplification, not an oversight, documented
+  directly in the class:** always the FIRST account and FIRST location,
+  with no multi-account/multi-location picker UI built anywhere in this
+  app. Most businesses using this CRM are expected to have exactly one
+  Google Business Profile account managing exactly one physical
+  location; an agency-style account managing many locations is a real
+  case but explicitly out of scope until this app's actual usage needs
+  it.
+- **`ConnectedAccountController::callback()`'s new Google-only step —
+  `autoFillGoogleReviewLinkIfMissing()` — runs strictly AFTER the
+  `ConnectedAccount::updateOrCreate()` call has already succeeded, and
+  this ordering is deliberate, not incidental.** The OAuth connection
+  itself is the primary, must-succeed outcome of this callback; the
+  review-link auto-fill is a nice-to-have on top of it. Because the
+  `ConnectedAccount` is saved first, nothing that happens afterward —
+  including the review-link lookup throwing outright — can ever undo or
+  block that save. Reversing the order (looking up the location before
+  saving the connection) would make a flaky or failing Business
+  Information API call capable of preventing a Google connection from
+  ever completing at all, which is exactly the failure mode this
+  ordering rules out by construction.
+- **Never overwrites a `google_review_url` the business owner already
+  set manually via the Settings page (Phase 7).** Guarded by a single
+  `blank($location->google_review_url)` check before ever calling
+  `GoogleBusinessProfileClient` — if it's already set to anything at
+  all, the method returns immediately without even attempting the
+  lookup. This is the specific, real bug being guarded against: without
+  this check, reconnecting Google (or a token simply refreshing through
+  this same callback path again later) would silently clobber a
+  deliberately-chosen custom review link, or a link the owner set
+  because their actual physical location differs from whatever Google
+  Business Profile now returns as "primary" — a surprising, hard-to-
+  notice data loss, not a convenience.
+- **The `GoogleBusinessProfileClient` call is wrapped in a `try/catch`
+  scoped to just that one call — not the `ConnectedAccount` save, which
+  has already committed by this point regardless.** On any `Throwable`
+  (no locations, an expired/invalid token for this specific API scope,
+  a network failure, anything), it's logged via `Log::warning()` (with
+  the `location_id` and the exception message) and the method simply
+  returns — **never rethrown**. This is what makes the auto-fill
+  genuinely best-effort: a business owner successfully connecting
+  Google must never see a failure screen, or lose the connection they
+  just made, because of a problem in a secondary lookup. They can
+  always set `google_review_url` by hand via Settings if this doesn't
+  pan out.
+- **`GoogleBusinessProfileClientImpl` is UNVERIFIED against real Google
+  developer credentials — no credentials exist for this project yet**,
+  same situation and same reasoning as every other real `*Impl` class
+  in this phase (`FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` in
+  Stage 1, `FacebookLeadsClientImpl` in Stage 2) and Twilio's own
+  outbound-SMS note in Phase 5a. Built to Google's documented API
+  shape, never actually exercised against it. No test constructs or
+  resolves it — `Tests\Fakes\FakeGoogleBusinessProfileClient` is bound
+  in its place for every test that touches the Google OAuth callback.
+- Covered by `tests/Feature/GoogleReviewLinkAutoFillTest.php`:
+  connecting Google with a location that has a `placeId`, when
+  `google_review_url` is currently unset, sets it to
+  `https://search.google.com/local/writereview?placeid={placeId}`;
+  **connecting Google when `google_review_url` is already set does NOT
+  overwrite it** (the critical one, same rigor as everywhere else this
+  session); connecting Google when `fetchPrimaryLocation()` returns
+  `null` (no locations) still creates the `ConnectedAccount`
+  successfully; connecting Google when `fetchPrimaryLocation()` THROWS
+  still creates the `ConnectedAccount` successfully; and connecting
+  Facebook never calls `GoogleBusinessProfileClient` at all (asserted
+  directly against the fake's recorded call list), proving the
+  `$provider === 'google'` gate keeps Facebook's callback path
+  completely unaffected by this stage's changes.
