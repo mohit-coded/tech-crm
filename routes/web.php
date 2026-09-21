@@ -17,10 +17,11 @@ use App\Http\Controllers\OpportunityBoardController;
 use App\Http\Controllers\OpportunityStageController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TwilioWebhookController;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
-    return view('welcome');
+    return redirect(Auth::check() ? route('dashboard') : route('login'));
 });
 
 Route::get('/dashboard', [DashboardController::class, 'index'])

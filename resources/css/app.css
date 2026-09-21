@@ -1,3 +1,50 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Semantic design tokens (Frontend redesign, Stage A).
+ *
+ * Each token is a CSS custom property holding a space-separated
+ * "R G B" triplet (no `rgb()` wrapper, no commas) — the format
+ * Tailwind's `rgb(var(--x) / <alpha-value>)` color function expects
+ * (see tailwind.config.js) so opacity utilities like `bg-brand/20`
+ * keep working. Light values live on `:root`; the dark block
+ * overrides the same variable names under `prefers-color-scheme:
+ * dark`, matching this app's existing (default) `darkMode: 'media'`
+ * strategy — no `.dark` class toggle exists or is being introduced.
+ *
+ * Because dark-mode switching happens at the variable level, a class
+ * like `bg-surface` or `text-primary` is already dark-mode-aware on
+ * its own — no `dark:` variant is needed at the usage site just to
+ * swap a token's color.
+ */
+@layer base {
+    :root {
+        --color-bg-base: 248 250 252;
+        --color-bg-surface: 255 255 255;
+        --color-bg-nav: 15 23 42;
+        --color-text-primary: 15 23 42;
+        --color-text-secondary: 71 85 105;
+        --color-brand: 29 78 216;
+        --color-status-success: 21 128 61;
+        --color-status-warning: 180 83 9;
+        --color-status-danger: 185 28 28;
+        --color-status-info: 3 105 161;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --color-bg-base: 15 23 42;
+            --color-bg-surface: 30 41 59;
+            --color-bg-nav: 2 6 23;
+            --color-text-primary: 241 245 249;
+            --color-text-secondary: 148 163 184;
+            --color-brand: 59 130 246;
+            --color-status-success: 34 197 94;
+            --color-status-warning: 245 158 11;
+            --color-status-danger: 239 68 68;
+            --color-status-info: 56 189 248;
+        }
+    }
+}
