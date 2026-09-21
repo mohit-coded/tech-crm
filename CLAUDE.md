@@ -35,7 +35,7 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
 - **Stale-relation gotcha (hit building `EnrollContactsOnStageEntry`, Phase 6 Stage 3):** after calling a method that updates a model's own attribute in place — `moveToStage()` updating `pipeline_stage_id` via `$this->update()` is the concrete case — don't trust an already-accessed relation on that *same in-memory instance* anywhere later in the same request/listener/job chain, even indirectly (e.g. the same object reused across two dispatches of the same event). Eloquent caches a `BelongsTo`/etc. relation the first time it's accessed and `update()` doesn't invalidate that cache, so `$model->someRelation` can keep returning the pre-update related row instead of the one the updated foreign key now points to. This bit the listener directly: it read `$opportunity->stage?->name` to get the newly-entered stage's name, but on a `moveToStage()` call that stage relation had already been cached (from `stage_id` before the move) by an earlier access — e.g. the same listener already having run once for that opportunity's *creation* — so it silently read the stage being moved *out of* instead of the one moved *into*. The fix, and the reusable lesson: look the related row up fresh by the id you actually have in hand (here, `PipelineStage::find($event->newStageId)`) rather than walking a relation off a model instance whose attributes changed underneath it — `$model->fresh()->someRelation` also works, but a direct fresh `Model::find($id)` on the id you already have is simpler when you don't need the rest of the model reloaded too. Caught by `CampaignTriggerTest`'s `moveToStage()` case failing against a listener that looked correct in isolation — worth remembering any time an event fired *after* an in-place `update()` needs to read the post-update related state through a relation.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 Stage 1 complete: appointment completion (`Appointment.completed_at` + `AppointmentController@complete`) and the reputation-adjacent trigger it fires (`AppointmentCompleted` → auto-enrollment on a fixed `'appointment_completed'` trigger_event) — see below; actual review-request sending (the rest of Phase 7) is still open. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -799,6 +799,73 @@ GitHub: mohit-coded/tech-crm (private), main branch
   names on both the create and edit pages, and the create page shows
   the empty-state message when the location has no pipeline stages
   yet.
+
+### Appointment completion + reputation trigger (Phase 7, Stage 1)
+- Adds a `completed_at` (nullable timestamp) column to `appointments`,
+  set by a new `AppointmentController@complete(Appointment $appointment)`
+  — same route-model-bound, tenant-safe shape as `confirm()`/`cancel()`
+  (a cross-tenant appointment id simply 404s before the method body
+  runs, no manual `location_id` check needed). Registered as
+  `POST /appointments/{appointment}/complete` in `routes/web.php`,
+  alongside `confirm`/`cancel`.
+- **Only a `confirmed`, not-yet-completed appointment can be
+  completed** — completing one that was never confirmed, was
+  cancelled, or is already completed is rejected (a flashed
+  `session('error')`, nothing changed) rather than silently allowed or
+  silently ignored; the appointments index now renders that flash
+  alongside the existing `session('status')` one. `status` itself is
+  *not* changed to some new `'completed'` value — it stays
+  `'confirmed'`, and `completed_at` being non-null is what represents
+  completion. The index's "Mark Completed" button is shown only when
+  `status === 'confirmed' && ! completed_at`; once completed, a small
+  "Completed" badge renders next to the status badge instead.
+- `App\Events\AppointmentCompleted` (plain event, same shape as
+  `OpportunityStageChanged`/exactly the established pattern) is
+  dispatched from `complete()` on success.
+  `App\Listeners\EnrollContactsOnAppointmentCompletion` (registered
+  via `Event::listen()` in `AppServiceProvider::boot()`, same
+  explicit-registration reasoning as `EnrollContactsOnStageEntry` —
+  see that note above) is a near-literal copy of
+  `EnrollContactsOnStageEntry`'s shape, simplified: no stage name to
+  resolve, just a single fixed `trigger_event` string,
+  `'appointment_completed'`. Finds active `Campaign`s in the
+  appointment's own `location_id` with exactly that `trigger_event`
+  (same explicit `withoutGlobalScopes()->where('location_id', ...)`
+  filtering, same reasoning — this listener may run with no
+  authenticated user) and enrolls the appointment's contact into each
+  via `EnrollsContacts`, skipping any campaign the contact already has
+  an `active` enrollment for — the same idempotency guard as the
+  stage-entry listener, for the same reason (this event firing twice
+  for the same appointment must not double-enroll).
+- **Admin form:** the `trigger_event` dropdown
+  (`campaigns/_form.blade.php`) now always offers a fixed
+  `"appointment_completed"` option — labeled "When an appointment is
+  marked completed" — merged in ahead of the per-stage
+  `"opportunity_stage:{name}"` options built from the location's
+  pipelines. Unlike the per-stage options, this one doesn't depend on
+  any pipeline existing, so the old "no pipeline stages yet" empty
+  state (Phase 6 Stage 3) no longer means an empty/broken dropdown —
+  the dropdown always has at least this one option now. That old
+  message is kept, but only as a secondary hint shown below the
+  (now never-empty) dropdown when there are no stage-based options,
+  rather than replacing the dropdown entirely.
+- Covered by two test files. `AppointmentControllerTest` (extended):
+  cannot complete another location's appointment (same 404 pattern as
+  confirm/cancel); completing a confirmed appointment sets
+  `completed_at` and dispatches `AppointmentCompleted`
+  (`Event::fake()` + `assertDispatched`); completing a non-confirmed
+  appointment is rejected — `completed_at` stays null, status
+  unchanged, `session('error')` present, event not dispatched; and
+  (an extra case beyond what was strictly asked, cheap to add given
+  the guard already existed) completing an already-completed
+  appointment is also rejected rather than silently resetting
+  `completed_at` to a new timestamp. `AppointmentCompletionTriggerTest`
+  (new, mirrors `CampaignTriggerTest`'s shape exactly): a matching
+  active campaign auto-enrolls the appointment's contact; the
+  idempotency case — an already-actively-enrolled contact is not
+  double-enrolled; a campaign in a different location with an
+  exactly-matching `trigger_event` is never triggered; and an inactive
+  campaign with a matching `trigger_event` enrolls no one.
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
