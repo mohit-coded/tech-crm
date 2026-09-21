@@ -32,8 +32,9 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **`exists`/`unique` validation rules are not Eloquent-aware:** they query the referenced table directly, completely bypassing `BelongsToLocation`'s global scope. This is a distinct risk from the `withoutGlobalScopes()`/parent-relation conventions above — those are both about *query resolution* (fetching a model instance); this is about *validation*, where there's no model instance or query-builder scope involved at all, just a raw existence check against the table. A plain `'exists:calendars,id'` (or `Rule::exists('calendars', 'id')` with no constraint) on a tenant-scoped foreign key like `calendar_id` or `pipeline_id` will happily validate an id belonging to a *different* tenant as legitimate. Any `exists` rule referencing a `BelongsToLocation`-scoped foreign key must constrain it explicitly: `Rule::exists('calendars', 'id')->where(fn ($q) => $q->where('location_id', Auth::user()->current_location_id))`. See `FunnelController::validated()`'s `calendar_id` rule.
 - **Session data referencing a tenant-owned record must be re-verified before use, same as a request-body id:** a session value isn't inherently more trustworthy than one submitted in a form — shared devices, session fixation, and (concretely, here) one visitor plausibly having two different funnels' submissions active in the same session all mean it can't be trusted on its own. Never use a session-stored id (e.g. a `Contact` id) directly; re-query it scoped to the current tenant/location and use the result, not the raw id. See `FunnelPublicController::sessionContactFor()`, which re-checks a session-stored `Contact` id against the *current* funnel's `location_id` on every read — proven by a test that plants a session value from location A's funnel under location B's funnel's own session key and confirms it's ignored rather than honored.
 - **Template for wrapping any third-party API (established with Twilio, Phase 5a):** define an injectable interface (`SmsSender`), bind the real implementation to it as a lazy container singleton (a closure, not eagerly constructed at boot) in `AppServiceProvider::register()`, and have the rest of the app depend on the interface — never a static facade. "Lazy" matters here: the closure only runs (constructing the real SDK client) when something actually resolves the interface, so as long as tests bind a fake to the same interface *before* anything resolves it, the real client/credentials are never touched and no test can accidentally make a live network call. See `App\Services\SmsSender`/`TwilioSmsSender`/`SmsSendResult` and `Tests\Fakes\FakeSmsSender`. Apply the same shape to the next third-party integration (email, FB Lead Ads, etc.) rather than reaching for a facade or a `new Client(...)` inline.
+- **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
 
-## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 Stage 1 complete: Campaigns data model + admin CRUD — see below; no execution engine yet, nothing enrolls a contact or sends anything automatically. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
+## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 Stage 1 complete: Campaigns data model + admin CRUD — see below. Phase 6 Stage 2 complete: the execution engine that walks an already-created `CampaignEnrollment` through its steps (`SendCampaignStep` job + `EnrollsContacts` service) — see below; trigger/auto-enrollment (Stage 3) is still open, so nothing in the app calls `enroll()` yet. Phase 8 basic Dashboard built with real data — see below; broader reporting still open.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
 3. Funnels/landing pages + lead capture
@@ -582,14 +583,16 @@ GitHub: mohit-coded/tech-crm (private), main branch
   that same thread, and the thread then displays it.
 
 ### Campaigns (Phase 6, Stage 1 — data model + admin CRUD only)
-- **No execution engine yet.** `campaigns`/`campaign_steps`/
+- **No execution engine as of this stage** — that's Stage 2, below,
+  which is now complete. `campaigns`/`campaign_steps`/
   `campaign_enrollments` exist and can be managed through the admin
-  UI, but nothing in the app currently enrolls a `Contact`, advances
+  UI, but nothing built in *this* stage enrolls a `Contact`, advances
   an enrollment through its steps, or sends anything automatically —
-  `trigger_event` on a `Campaign` is just a string field right now,
-  not wired to any actual event listener. Same incremental approach
-  as `AvailabilitySlotCalculator` (Phase 4): build and test the data
-  layer in isolation first, wire up execution later.
+  `trigger_event` on a `Campaign` is still just a string field, not
+  wired to any actual event listener (that's Stage 3, still open).
+  Same incremental approach as `AvailabilitySlotCalculator` (Phase 4):
+  build and test the data layer in isolation first, wire up execution
+  later.
 - `campaigns` (`location_id` `BelongsToLocation`, `name`,
   `trigger_event`, `is_active` default true) is a normal tenant
   table. `campaign_steps` (`campaign_id` FK cascadeOnDelete,
@@ -650,6 +653,64 @@ GitHub: mohit-coded/tech-crm (private), main branch
   campaign's update is silently ignored — whether the attempted
   operation was an edit or a removal — leaving the real owner's step
   completely untouched.
+
+### Campaigns (Phase 6, Stage 2 — execution engine, complete)
+- **Still no trigger/auto-enrollment (Stage 3).** This stage only
+  builds the machinery to walk an *already-created*
+  `CampaignEnrollment` through its campaign's steps — nothing yet
+  calls `enroll()` on its own. `trigger_event` remains an inert
+  string field until Stage 3 wires it to a real event listener.
+- `App\Services\EnrollsContacts::enroll(Contact $contact, Campaign
+  $campaign): CampaignEnrollment` creates the enrollment (`status:
+  'active'`, `location_id` set explicitly from `$campaign->location_id`
+  — never via `BelongsToLocation` auto-fill, since this may end up
+  called from a queued job or event listener later with no
+  authenticated user) and dispatches `SendCampaignStep` for the
+  campaign's *first* step, delayed by that first step's own
+  `delay_minutes` — a sequence can have an initial delay before its
+  very first message, not just between later messages.
+  `EnrollsContacts::cancel(CampaignEnrollment $enrollment): void`
+  just sets `status: 'cancelled'`; nothing else is needed, given how
+  `SendCampaignStep` is written (see the next bullet, and the new
+  cancellation-pattern convention above).
+- `App\Jobs\SendCampaignStep implements ShouldQueue` (constructor:
+  `CampaignEnrollment $enrollment`, `CampaignStep $step`) is the
+  reusable cancellation-pattern in practice (see Conventions above):
+  `handle()` re-fetches the enrollment fresh via
+  `CampaignEnrollment::find($this->enrollment->id)` first thing and
+  no-ops immediately if it's not found or `status !== 'active'` —
+  this, not un-queuing a pending delayed job, is the entire
+  cancellation mechanism. If still active: for `channel: 'sms'`, it
+  creates a `Message` (`direction: 'outbound'`, explicit `location_id`
+  from the enrollment, `status: 'queued'`) and dispatches the existing
+  `SendSmsMessage` job — reusing Phase 5's sending infrastructure
+  rather than reimplementing it. **For `channel: 'email'`, it only
+  logs (`Log::info`) that email sending isn't implemented yet and
+  moves on — a known, deliberate gap (no email infra exists at all
+  yet), not a bug, and not a blocker for finishing the SMS path.**
+  Either way, it then updates `enrollment.current_step_id` to this
+  step, looks up the campaign's next step by `position`, and either
+  dispatches a new `SendCampaignStep` for it (delayed by that *next*
+  step's own `delay_minutes`) or, if there is no next step, marks the
+  enrollment `completed`.
+- Covered by `tests/Feature/CampaignExecutionTest.php`, unit-level
+  throughout — no real queue worker, `Queue::fake()` +
+  `assertPushed`/`assertNotPushed` to check what gets dispatched (and
+  its delay), `->handle()` called directly to observe side effects,
+  same style as `SendSmsMessageTest`. Cases: enrolling dispatches the
+  first step's job with that step's own delay; running a step's job
+  creates a `Message` and dispatches `SendSmsMessage` (no real Twilio
+  call); running a step's job dispatches the next step's job with the
+  *next* step's own `delay_minutes`; running the last step's job marks
+  the enrollment `completed` and dispatches nothing further;
+  **running a step's job against an enrollment that was cancelled
+  since the job was constructed sends nothing and dispatches nothing
+  further** — the critical proof that the cancellation mechanism
+  actually works, by constructing the job with a pre-cancellation
+  enrollment instance and only cancelling afterward, before calling
+  `handle()`; `cancel()` sets `status: 'cancelled'`; and `enroll()`
+  sets `location_id` explicitly when called with no authenticated
+  user at all (proving it doesn't blow up or silently omit it).
 
 ### Dashboard (Phase 8, basic version)
 - `GET /dashboard` (`DashboardController@index`) replaced the old
