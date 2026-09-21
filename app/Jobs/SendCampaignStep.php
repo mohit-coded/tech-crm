@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\CampaignEnrollment;
 use App\Models\CampaignStep;
 use App\Models\Message;
+use App\Services\ResolvesMessagePlaceholders;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -41,11 +42,17 @@ class SendCampaignStep implements ShouldQueue
         }
 
         if ($this->step->channel === 'sms') {
+            // Resolved against the enrollment's own contact/location
+            // (via CampaignEnrollment's contact()/location() relations —
+            // location() comes from BelongsToLocation) so the actual
+            // sent text carries the real values, not the raw template.
+            $body = ResolvesMessagePlaceholders::resolve($this->step->body, $enrollment->contact, $enrollment->location);
+
             $message = Message::create([
                 'location_id' => $enrollment->location_id,
                 'contact_id' => $enrollment->contact_id,
                 'direction' => 'outbound',
-                'body' => $this->step->body,
+                'body' => $body,
                 'status' => 'queued',
             ]);
 

@@ -43,6 +43,10 @@
                     <x-nav-link :href="route('campaigns.index')" :active="request()->routeIs('campaigns.*')">
                         {{ __('Campaigns') }}
                     </x-nav-link>
+
+                    <x-nav-link :href="route('settings.location.edit')" :active="request()->routeIs('settings.*')">
+                        {{ __('Settings') }}
+                    </x-nav-link>
                 </div>
             </div>
 
@@ -159,6 +163,10 @@
 
             <x-responsive-nav-link :href="route('campaigns.index')" :active="request()->routeIs('campaigns.*')">
                 {{ __('Campaigns') }}
+            </x-responsive-nav-link>
+
+            <x-responsive-nav-link :href="route('settings.location.edit')" :active="request()->routeIs('settings.*')">
+                {{ __('Settings') }}
             </x-responsive-nav-link>
         </div>
 

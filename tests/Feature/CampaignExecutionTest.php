@@ -217,6 +217,46 @@ class CampaignExecutionTest extends TestCase
         $this->assertSame(0, Message::withoutGlobalScopes()->count());
     }
 
+    // Phase 7 Stage 2: the step body's {{placeholder}}s must be resolved
+    // against the enrollment's real contact/location before the Message
+    // is created — the actual sent text, not the raw template.
+    public function test_running_a_steps_job_resolves_message_placeholders_with_real_contact_and_location_values(): void
+    {
+        Queue::fake();
+
+        [$location, $campaign, $contact] = $this->makeCampaignWithSteps([
+            [
+                'channel' => 'sms',
+                'body' => 'Hi {{contact.first_name}}, please review us: {{review_link}}',
+                'delay_minutes' => 0,
+            ],
+        ]);
+
+        $location->update(['google_review_url' => 'https://g.page/r/example/review']);
+        $contact->update(['first_name' => 'Jamie']);
+
+        // enroll() is the real EnrollsContacts service, and handle() is
+        // called directly on the real SendCampaignStep job — the same
+        // pattern every other job-side-effect test in this file uses,
+        // since Queue::fake() means SendSmsMessage (which this step also
+        // dispatches) is only recorded, never actually run, so this
+        // never risks a real Twilio call.
+        $enrollment = (new EnrollsContacts())->enroll($contact, $campaign);
+        $step = CampaignStep::where('campaign_id', $campaign->id)->sole();
+
+        (new SendCampaignStep($enrollment, $step))->handle();
+
+        $message = Message::withoutGlobalScopes()->sole();
+        $this->assertSame(
+            'Hi Jamie, please review us: https://g.page/r/example/review',
+            $message->body
+        );
+
+        Queue::assertPushed(SendSmsMessage::class, function (SendSmsMessage $job) use ($message) {
+            return $job->message->is($message);
+        });
+    }
+
     public function test_cancel_marks_the_enrollment_cancelled(): void
     {
         [$location, $campaign, $contact] = $this->makeCampaignWithSteps([

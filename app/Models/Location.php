@@ -27,6 +27,7 @@ class Location extends Model
         'postal_code',
         'country',
         'timezone',
+        'google_review_url',
     ];
 
     /**

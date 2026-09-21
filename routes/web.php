@@ -8,6 +8,7 @@ use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FunnelController;
 use App\Http\Controllers\FunnelPublicController;
+use App\Http\Controllers\LocationSettingsController;
 use App\Http\Controllers\LocationSwitchController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\OpportunityBoardController;
@@ -31,6 +32,12 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/locations/switch/{location}', [LocationSwitchController::class, 'switch'])
         ->name('locations.switch');
+
+    // One settings page per location, not a list — no {location} route
+    // parameter, see LocationSettingsController for why that keeps this
+    // tenant-safe by construction.
+    Route::get('/settings', [LocationSettingsController::class, 'edit'])->name('settings.location.edit');
+    Route::put('/settings', [LocationSettingsController::class, 'update'])->name('settings.location.update');
 
     Route::resource('contacts', ContactController::class)->except('show');
 
