@@ -23,6 +23,7 @@ class Appointment extends Model
         'starts_at',
         'ends_at',
         'status',
+        'completed_at',
     ];
 
     /**
@@ -39,6 +40,7 @@ class Appointment extends Model
         return [
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
+            'completed_at' => 'datetime',
         ];
     }
 

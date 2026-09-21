@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\AppointmentCompleted;
 use App\Models\Appointment;
 use App\Models\Opportunity;
 use Illuminate\Http\RedirectResponse;
@@ -38,6 +39,27 @@ class AppointmentController extends Controller
         $appointment->update(['status' => 'cancelled']);
 
         return redirect()->route('appointments.index')->with('status', __('Appointment cancelled.'));
+    }
+
+    /**
+     * Only a 'confirmed' appointment that isn't already completed can be
+     * marked completed — completing one that was never confirmed, was
+     * cancelled, or is already completed is a nonsensical transition, so
+     * it's rejected (a flashed error, nothing changed) rather than
+     * silently allowed or silently ignored.
+     */
+    public function complete(Appointment $appointment): RedirectResponse
+    {
+        if ($appointment->status !== 'confirmed' || $appointment->completed_at !== null) {
+            return redirect()->route('appointments.index')
+                ->with('error', __('Only a confirmed, not-yet-completed appointment can be marked completed.'));
+        }
+
+        $appointment->update(['completed_at' => now()]);
+
+        event(new AppointmentCompleted($appointment));
+
+        return redirect()->route('appointments.index')->with('status', __('Appointment marked completed.'));
     }
 
     /**

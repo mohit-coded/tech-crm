@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Events\AppointmentCompleted;
 use App\Events\OpportunityStageChanged;
+use App\Listeners\EnrollContactsOnAppointmentCompletion;
 use App\Listeners\EnrollContactsOnStageEntry;
 use App\Services\SmsSender;
 use App\Services\TwilioSmsSender;
@@ -37,5 +39,6 @@ class AppServiceProvider extends ServiceProvider
         // app/Listeners auto-discovery — this app's bootstrap/app.php
         // never calls ->withEvents(), so discovery isn't active.
         Event::listen(OpportunityStageChanged::class, EnrollContactsOnStageEntry::class);
+        Event::listen(AppointmentCompleted::class, EnrollContactsOnAppointmentCompletion::class);
     }
 }

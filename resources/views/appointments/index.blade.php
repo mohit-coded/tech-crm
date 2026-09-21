@@ -15,6 +15,12 @@
                         </div>
                     @endif
 
+                    @if (session('error'))
+                        <div class="mb-4 text-sm text-red-600 dark:text-red-400">
+                            {{ session('error') }}
+                        </div>
+                    @endif
+
                     @if ($appointments->isEmpty())
                         <p class="text-sm text-gray-500 dark:text-gray-400">
                             {{ __('No appointments yet.') }}
@@ -60,6 +66,11 @@
                                                 <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ $statusColors[$appointment->status] ?? $statusColors['cancelled'] }}">
                                                     {{ ucfirst($appointment->status) }}
                                                 </span>
+                                                @if ($appointment->completed_at)
+                                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300">
+                                                        {{ __('Completed') }}
+                                                    </span>
+                                                @endif
                                             </td>
                                             <td class="py-2 pr-4 text-right whitespace-nowrap">
                                                 @if (! in_array($appointment->status, ['confirmed', 'cancelled'], true))
@@ -67,6 +78,15 @@
                                                         @csrf
                                                         <button type="submit" class="underline text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-200">
                                                             {{ __('Confirm') }}
+                                                        </button>
+                                                    </form>
+                                                @endif
+
+                                                @if ($appointment->status === 'confirmed' && ! $appointment->completed_at)
+                                                    <form method="POST" action="{{ route('appointments.complete', $appointment) }}" class="inline">
+                                                        @csrf
+                                                        <button type="submit" class="ms-3 underline text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200">
+                                                            {{ __('Mark Completed') }}
                                                         </button>
                                                     </form>
                                                 @endif

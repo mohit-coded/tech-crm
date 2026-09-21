@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Events\AppointmentCompleted;
 use App\Models\Appointment;
 use App\Models\Calendar;
 use App\Models\Contact;
@@ -11,6 +12,7 @@ use App\Models\Pipeline;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Event;
 use Tests\TestCase;
 
 class AppointmentControllerTest extends TestCase
@@ -230,6 +232,82 @@ class AppointmentControllerTest extends TestCase
         // No matching stage in this pipeline — the Opportunity is left
         // exactly where it was, not errored on.
         $this->assertSame($onlyStage->id, $opportunity->fresh()->pipeline_stage_id);
+    }
+
+    public function test_cannot_complete_an_appointment_from_another_location(): void
+    {
+        [$userA] = $this->makeUserWithLocation();
+        [$userB, $locationB] = $this->makeUserWithLocation();
+
+        $this->actingAs($userB);
+        $appointmentB = $this->makeAppointment($locationB, ['status' => 'confirmed']);
+
+        $this->actingAs($userA);
+        $response = $this->post("/appointments/{$appointmentB->id}/complete");
+
+        $response->assertNotFound();
+        $this->assertNull($appointmentB->fresh()->completed_at);
+    }
+
+    public function test_completing_a_confirmed_appointment_sets_completed_at_and_fires_appointment_completed(): void
+    {
+        Event::fake([AppointmentCompleted::class]);
+
+        [$user, $location] = $this->makeUserWithLocation();
+        $this->actingAs($user);
+
+        $appointment = $this->makeAppointment($location, ['status' => 'confirmed']);
+
+        $response = $this->post("/appointments/{$appointment->id}/complete");
+
+        $response->assertRedirect(route('appointments.index'));
+        $this->assertNotNull($appointment->fresh()->completed_at);
+        $this->assertSame('confirmed', $appointment->fresh()->status);
+
+        Event::assertDispatched(
+            AppointmentCompleted::class,
+            fn (AppointmentCompleted $event) => $event->appointment->is($appointment)
+        );
+    }
+
+    public function test_completing_an_appointment_that_is_not_confirmed_is_rejected(): void
+    {
+        Event::fake([AppointmentCompleted::class]);
+
+        [$user, $location] = $this->makeUserWithLocation();
+        $this->actingAs($user);
+
+        $appointment = $this->makeAppointment($location, ['status' => 'requested']);
+
+        $response = $this->post("/appointments/{$appointment->id}/complete");
+
+        $response->assertRedirect(route('appointments.index'));
+        $response->assertSessionHas('error');
+        $this->assertNull($appointment->fresh()->completed_at);
+        $this->assertSame('requested', $appointment->fresh()->status);
+
+        Event::assertNotDispatched(AppointmentCompleted::class);
+    }
+
+    public function test_completing_an_already_completed_appointment_is_rejected(): void
+    {
+        Event::fake([AppointmentCompleted::class]);
+
+        [$user, $location] = $this->makeUserWithLocation();
+        $this->actingAs($user);
+
+        $appointment = $this->makeAppointment($location, [
+            'status' => 'confirmed',
+            'completed_at' => Carbon::parse('2026-10-01 09:00:00', 'UTC'),
+        ]);
+
+        $response = $this->post("/appointments/{$appointment->id}/complete");
+
+        $response->assertRedirect(route('appointments.index'));
+        $response->assertSessionHas('error');
+        $this->assertTrue($appointment->fresh()->completed_at->equalTo(Carbon::parse('2026-10-01 09:00:00', 'UTC')));
+
+        Event::assertNotDispatched(AppointmentCompleted::class);
     }
 
     public function test_appointment_date_time_is_displayed_in_the_calendars_own_timezone_not_utc(): void
