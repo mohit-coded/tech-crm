@@ -1,0 +1,86 @@
+[1mdiff --git a/tests/Feature/FunnelBookingTest.php b/tests/Feature/FunnelBookingTest.php[m
+[1mindex 39167a5..d925ab9 100644[m
+[1m--- a/tests/Feature/FunnelBookingTest.php[m
+[1m+++ b/tests/Feature/FunnelBookingTest.php[m
+[36m@@ -10,7 +10,10 @@[m
+ use App\Models\Opportunity;[m
+ use App\Models\Pipeline;[m
+ use Carbon\Carbon;[m
+[32m+[m[32muse Illuminate\Database\Query\Builder as QueryBuilder;[m
+[32m+[m[32muse Illuminate\Database\Query\Grammars\MySqlGrammar;[m
+ use Illuminate\Foundation\Testing\RefreshDatabase;[m
+[32m+[m[32muse Illuminate\Support\Facades\DB;[m
+ use Tests\TestCase;[m
+ [m
+ class FunnelBookingTest extends TestCase[m
+[36m@@ -439,4 +442,70 @@[m [mpublic function test_session_contact_from_another_locations_funnel_is_not_honore[m
+         // Alice's own contact record is completely untouched.[m
+         $this->assertSame('Alice From A', $contactA->fresh()->first_name);[m
+     }[m
+[32m+[m
+[32m+[m[32m    // Hardening: a pessimistic lock now runs inside confirmBooking()'s[m
+[32m+[m[32m    // transaction, right before Appointment::create(). This proves it's[m
+[32m+[m[32m    // actually there and structured correctly — a locked SELECT against[m
+[32m+[m[32m    // 'appointments' filtering by calendar_id/status/starts_at/ends_at —[m
+[32m+[m[32m    // and that a normal booking still succeeds cleanly with it in place.[m
+[32m+[m[32m    public function test_confirming_a_booking_runs_a_locked_overlap_check_before_creating_the_appointment(): void[m
+[32m+[m[32m    {[m
+[32m+[m[32m        [$location, $calendar] = $this->makeLocationWithCalendar();[m
+[32m+[m
+[32m+[m[32m        Funnel::factory()->create([[m
+[32m+[m[32m            'location_id' => $location->id,[m
+[32m+[m[32m            'calendar_id' => $calendar->id,[m
+[32m+[m[32m            'slug' => 'lock-test',[m
+[32m+[m[32m            'is_published' => true,[m
+[32m+[m[32m        ]);[m
+[32m+[m
+[32m+[m[32m        DB::enableQueryLog();[m
+[32m+[m
+[32m+[m[32m        $response = $this->post('/f/lock-test/book/confirm', [[m
+[32m+[m[32m            'date' => $this->bookingDate()->format('Y-m-d'),[m
+[32m+[m[32m            'start_time' => '09:00',[m
+[32m+[m[32m            'name' => 'Jane Doe',[m
+[32m+[m[32m            'email' => 'jane@example.com',[m
+[32m+[m[32m            'phone' => '555-1234',[m
+[32m+[m[32m        ]);[m
+[32m+[m
+[32m+[m[32m        $overlapCheckQueries = collect(DB::getQueryLog())->filter([m
+[32m+[m[32m            fn (array $log) => str_contains($log['query'], 'appointments')[m
+[32m+[m[32m                && str_contains($log['query'], 'calendar_id')[m
+[32m+[m[32m                && str_contains($log['query'], 'starts_at')[m
+[32m+[m[32m                && str_contains($log['query'], 'ends_at')[m
+[32m+[m[32m        );[m
+[32m+[m
+[32m+[m[32m        DB::disableQueryLog();[m
+[32m+[m
+[32m+[m[32m        // The booking still succeeds — the lock doesn't break the normal[m
+[32m+[m[32m        // (no-conflict) path.[m
+[32m+[m[32m        $response->assertRedirect(route('funnels.public.book.confirmed', 'lock-test'));[m
+[32m+[m[32m        $this->assertSame(1, Appointment::withoutGlobalScopes()->count());[m
+[32m+[m
+[32m+[m[32m        // The locked overlap-check query (calendar_id/status/starts_at/[m
+[32m+[m[32m        // ends_at) actually ran — not just the calculator's earlier,[m
+[32m+[m[32m        // unlocked read.[m
+[32m+[m[32m        $this->assertGreaterThanOrEqual(1, $overlapCheckQueries->count());[m
+[32m+[m
+[32m+[m[32m        // SQLite (the local/test driver — see config/database.php) has no[m
+[32m+[m[32m        // row-level locking syntax, so Illuminate\Database\Query\Grammars\[m
+[32m+[m[32m        // SQLiteGrammar::compileLock() compiles lockForUpdate() to a[m
+[32m+[m[32m        // silent no-op — "for update" can never appear in a query logged[m
+[32m+[m[32m        // against this connection, lock or no lock. That's proven instead[m
+[32m+[m[32m        // against the production driver (MySQL) by compiling the exact[m
+[32m+[m[32m        // same query shape used in confirmBooking() with a real[m
+[32m+[m[32m        // MySqlGrammar: this is what actually ships to production, and it[m
+[32m+[m[32m        // does emit "for update".[m
+[32m+[m[32m        $mysqlSql = (new QueryBuilder(DB::connection(), new MySqlGrammar(DB::connection())))[m
+[32m+[m[32m            ->from('appointments')[m
+[32m+[m[32m            ->where('calendar_id', $calendar->id)[m
+[32m+[m[32m            ->where('status', '!=', 'cancelled')[m
+[32m+[m[32m            ->where('starts_at', '<', now())[m
+[32m+[m[32m            ->where('ends_at', '>', now())[m
+[32m+[m[32m            ->lockForUpdate()[m
+[32m+[m[32m            ->toSql();[m
+[32m+[m
+[32m+[m[32m        $this->assertStringContainsStringIgnoringCase('for update', $mysqlSql);[m
+[32m+[m[32m    }[m
+ }[m

@@ -9,6 +9,7 @@ use App\Models\Location;
 use App\Services\AvailabilitySlotCalculator;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -269,6 +270,53 @@ class AvailabilitySlotCalculatorTest extends TestCase
         $this->assertNotEmpty($slots);
         $this->assertSame('America/Chicago', $slots[0]['start']->timezoneName);
         $this->assertSame('09:00', $slots[0]['start']->format('H:i'));
+    }
+
+    // Scenario: bookedIntervals() is now bounded at the query level (it
+    // used to fetch every non-cancelled appointment on the calendar) —
+    // appointments weeks away must be excluded from the fetched set
+    // entirely, not just from the final slot list. Proven two ways: the
+    // correct slots still come back (results are right), and the actual
+    // SQL sent for the appointments query is a bounded starts_at/ends_at
+    // range, not an unfiltered fetch (the query is right, which is the
+    // actual point of this test).
+    public function test_appointments_far_outside_the_requested_dates_window_are_excluded_by_a_bounded_query(): void
+    {
+        $calendar = $this->makeCalendar(['duration_minutes' => 30]);
+        $date = Carbon::parse('2026-10-14', 'UTC');
+
+        $calendar->availabilityRules()->create([
+            'day_of_week' => $date->dayOfWeek, 'start_time' => '09:00', 'end_time' => '10:00',
+        ]);
+
+        // Weeks before and after the requested date — must not affect
+        // this day's slots, and must not even be fetched.
+        $this->makeAppointment($calendar, '2026-09-01 09:00:00', '2026-09-01 09:30:00');
+        $this->makeAppointment($calendar, '2026-11-20 09:00:00', '2026-11-20 09:30:00');
+
+        DB::enableQueryLog();
+
+        $slots = (new AvailabilitySlotCalculator())->getAvailableSlots($calendar, $date);
+
+        $appointmentQueries = collect(DB::getQueryLog())
+            ->filter(fn (array $log) => str_contains($log['query'], 'appointments'))
+            ->values();
+
+        DB::disableQueryLog();
+
+        // Results are still correct — the far-away appointments never
+        // touched this day's slots.
+        $this->assertSame(['09:00', '09:30'], $this->startTimes($slots));
+
+        // And the query itself is now bounded: exactly one query against
+        // appointments, filtering by starts_at/ends_at (not just
+        // calendar_id/status), proving the window narrowing is actually
+        // present rather than results merely still being correct by
+        // coincidence.
+        $this->assertCount(1, $appointmentQueries);
+        $appointmentQuery = $appointmentQueries->first()['query'];
+        $this->assertStringContainsString('starts_at', $appointmentQuery);
+        $this->assertStringContainsString('ends_at', $appointmentQuery);
     }
 
     // The final `?? 'UTC'` fallback in AvailabilitySlotCalculator::resolveTimezone()

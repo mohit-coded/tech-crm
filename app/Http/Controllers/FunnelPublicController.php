@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\AppointmentSlotUnavailableException;
 use App\Models\Appointment;
 use App\Models\Contact;
 use App\Models\Funnel;
@@ -9,6 +10,7 @@ use App\Models\Opportunity;
 use App\Models\Pipeline;
 use App\Services\AvailabilitySlotCalculator;
 use Carbon\Carbon;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -164,80 +166,120 @@ class FunnelPublicController extends Controller
         // value alone is never sufficient proof of tenancy.
         $sessionContact = $this->sessionContactFor($funnel);
 
-        DB::transaction(function () use ($validated, $funnel, $startsAt, $endsAt, $sessionContact) {
-            if ($sessionContact) {
-                // The visitor came from this funnel's own lead form
-                // (store() stashed this id) — use that Contact directly
-                // rather than re-doing an email lookup at all. This is
-                // both simpler and fully sidesteps the case/typo-drift
-                // matching problem a human retyping their email can
-                // cause; the fields are still editable, so update() here
-                // captures any correction (or a booking made for someone
-                // else) without creating a second Contact.
-                $contact = $sessionContact;
-                $contact->update([
-                    'first_name' => $validated['name'],
-                    'email' => $validated['email'],
-                    'phone' => $validated['phone'],
-                ]);
-            } else {
-                // No session-linked contact — e.g. a visitor landed here
-                // directly via a shared/bookmarked booking link without
-                // going through the lead form first. Fall back to a
-                // fresh lookup, matched case-insensitively: email
-                // addresses aren't case-sensitive, and a human retyping
-                // one (rather than it being carried through automatically
-                // above) is exactly where casing drift happens.
-                $contact = Contact::where('location_id', $funnel->location_id)
-                    ->whereRaw('LOWER(email) = ?', [strtolower($validated['email'])])
-                    ->first();
-
-                if ($contact) {
+        try {
+            DB::transaction(function () use ($validated, $funnel, $startsAt, $endsAt, $sessionContact) {
+                if ($sessionContact) {
+                    // The visitor came from this funnel's own lead form
+                    // (store() stashed this id) — use that Contact directly
+                    // rather than re-doing an email lookup at all. This is
+                    // both simpler and fully sidesteps the case/typo-drift
+                    // matching problem a human retyping their email can
+                    // cause; the fields are still editable, so update() here
+                    // captures any correction (or a booking made for someone
+                    // else) without creating a second Contact.
+                    $contact = $sessionContact;
                     $contact->update([
-                        'first_name' => $validated['name'],
-                        'phone' => $validated['phone'],
-                    ]);
-                } else {
-                    $contact = Contact::create([
-                        'location_id' => $funnel->location_id,
                         'first_name' => $validated['name'],
                         'email' => $validated['email'],
                         'phone' => $validated['phone'],
                     ]);
+                } else {
+                    // No session-linked contact — e.g. a visitor landed here
+                    // directly via a shared/bookmarked booking link without
+                    // going through the lead form first. Fall back to a
+                    // fresh lookup, matched case-insensitively: email
+                    // addresses aren't case-sensitive, and a human retyping
+                    // one (rather than it being carried through automatically
+                    // above) is exactly where casing drift happens.
+                    $contact = Contact::where('location_id', $funnel->location_id)
+                        ->whereRaw('LOWER(email) = ?', [strtolower($validated['email'])])
+                        ->first();
+
+                    if ($contact) {
+                        $contact->update([
+                            'first_name' => $validated['name'],
+                            'phone' => $validated['phone'],
+                        ]);
+                    } else {
+                        $contact = Contact::create([
+                            'location_id' => $funnel->location_id,
+                            'first_name' => $validated['name'],
+                            'email' => $validated['email'],
+                            'phone' => $validated['phone'],
+                        ]);
+                    }
                 }
-            }
 
-            Appointment::create([
-                'location_id' => $funnel->location_id,
-                'calendar_id' => $funnel->calendar_id,
-                'contact_id' => $contact->id,
-                'starts_at' => $startsAt,
-                'ends_at' => $endsAt,
-                'status' => 'requested',
-            ]);
+                // The earlier calculator re-check (above, before this
+                // transaction even opened) only closes a "read a while
+                // ago, slot got taken since" race — it's a plain read, so
+                // two requests can both pass it at the exact same instant
+                // and both reach here. This pessimistic lock closes that
+                // true simultaneous-write gap: lock every non-cancelled
+                // appointment on this calendar that overlaps the exact
+                // slot being booked, then do the real overlap check
+                // against THAT locked result, not the calculator's
+                // earlier, pre-lock one. A concurrent request racing this
+                // one either blocks here until this transaction commits
+                // (then sees the row this one inserted and correctly
+                // bails out below) or finds nothing to lock and proceeds
+                // — which is exactly the "nothing exists yet" gap the new
+                // (calendar_id, starts_at) unique index backstops; see
+                // that migration's docblock.
+                $lockedConflict = Appointment::where('calendar_id', $funnel->calendar_id)
+                    ->where('status', '!=', 'cancelled')
+                    ->where('starts_at', '<', $endsAt)
+                    ->where('ends_at', '>', $startsAt)
+                    ->lockForUpdate()
+                    ->exists();
 
-            // If the lead already has an Opportunity (created in store()
-            // when they first submitted the funnel) and its pipeline has
-            // a "Booking Requested" stage (the exact name DatabaseSeeder
-            // and RegisteredUserController both seed), move it there via
-            // moveToStage() — the only sanctioned way to change stage, so
-            // OpportunityStageChanged still fires.
-            $opportunity = Opportunity::where('location_id', $funnel->location_id)
-                ->where('contact_id', $contact->id)
-                ->latest()
-                ->first();
+                if ($lockedConflict) {
+                    throw new AppointmentSlotUnavailableException();
+                }
 
-            if ($opportunity) {
-                $bookingRequestedStage = $opportunity->pipeline
-                    ->stages()
-                    ->where('name', 'Booking Requested')
+                Appointment::create([
+                    'location_id' => $funnel->location_id,
+                    'calendar_id' => $funnel->calendar_id,
+                    'contact_id' => $contact->id,
+                    'starts_at' => $startsAt,
+                    'ends_at' => $endsAt,
+                    'status' => 'requested',
+                ]);
+
+                // If the lead already has an Opportunity (created in store()
+                // when they first submitted the funnel) and its pipeline has
+                // a "Booking Requested" stage (the exact name DatabaseSeeder
+                // and RegisteredUserController both seed), move it there via
+                // moveToStage() — the only sanctioned way to change stage, so
+                // OpportunityStageChanged still fires.
+                $opportunity = Opportunity::where('location_id', $funnel->location_id)
+                    ->where('contact_id', $contact->id)
+                    ->latest()
                     ->first();
 
-                if ($bookingRequestedStage) {
-                    $opportunity->moveToStage($bookingRequestedStage);
+                if ($opportunity) {
+                    $bookingRequestedStage = $opportunity->pipeline
+                        ->stages()
+                        ->where('name', 'Booking Requested')
+                        ->first();
+
+                    if ($bookingRequestedStage) {
+                        $opportunity->moveToStage($bookingRequestedStage);
+                    }
                 }
-            }
-        });
+            });
+        } catch (AppointmentSlotUnavailableException|UniqueConstraintViolationException) {
+            // The lockForUpdate() check above catches a conflict against
+            // an already-existing row; the unique index catches the
+            // "nothing existed yet to lock, two inserts raced" case
+            // instead, surfacing here as a UniqueConstraintViolationException
+            // from the Appointment::create() call itself. Both are the
+            // same user-facing outcome: someone else got this slot first.
+            return redirect()
+                ->route('funnels.public.book', ['slug' => $funnel->slug, 'date' => $validated['date']])
+                ->withErrors(['start_time' => __('Sorry, that time was just booked. Please choose another.')])
+                ->withInput();
+        }
 
         return redirect()->route('funnels.public.book.confirmed', $funnel->slug);
     }

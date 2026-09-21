@@ -37,7 +37,7 @@ class AvailabilitySlotCalculator
             return [];
         }
 
-        $bookedIntervals = $this->bookedIntervals($calendar, $timezone);
+        $bookedIntervals = $this->bookedIntervals($calendar, $timezone, $localDate);
 
         $now = Carbon::now($timezone);
         $isToday = $localDate->isSameDay($now);
@@ -98,18 +98,37 @@ class AvailabilitySlotCalculator
     }
 
     /**
-     * All non-cancelled appointments on this calendar, converted into the
-     * calendar's own timezone. Not date-filtered at the query level (this
-     * is a foundational implementation prioritizing correctness over query
-     * scale) — the overlap check below only ever matters for appointments
-     * that actually fall near the requested day.
+     * Non-cancelled appointments on this calendar that could plausibly
+     * overlap the requested local day, converted into the calendar's own
+     * timezone. Bounded at the query level to a window around
+     * $localDate (previously fetched every non-cancelled appointment on
+     * the whole calendar — a known, flagged trade-off, now resolved).
+     *
+     * The window is $localDate's local start/end, padded by a full 24
+     * hours on each side and converted to UTC for the query (the column
+     * is stored in UTC — see the Appointment model — so the bound must
+     * be too, not left in the calendar's local timezone). 24 hours is
+     * deliberately generous rather than an exact boundary: the widest
+     * real-world UTC offset is +14:00 (Kiribati) to -12:00 (Baker
+     * Island), so a full day's padding on each side covers every
+     * possible timezone (and any DST shift within it) with room to
+     * spare, without having to compute or special-case an exact offset
+     * per timezone. Over-padding costs a handful of extra rows fetched;
+     * under-padding risks silently excluding a genuinely overlapping
+     * appointment, which is the one outcome this can't allow — so the
+     * trade deliberately favors width.
      *
      * @return list<array{start: Carbon, end: Carbon}>
      */
-    private function bookedIntervals(Calendar $calendar, string $timezone): array
+    private function bookedIntervals(Calendar $calendar, string $timezone, Carbon $localDate): array
     {
+        $windowStart = $localDate->clone()->subDay()->setTimezone('UTC');
+        $windowEnd = $localDate->clone()->addDays(2)->setTimezone('UTC');
+
         return $calendar->appointments()
             ->where('status', '!=', 'cancelled')
+            ->where('starts_at', '<', $windowEnd)
+            ->where('ends_at', '>', $windowStart)
             ->get()
             ->map(fn ($appointment) => [
                 'start' => $appointment->starts_at->clone()->setTimezone($timezone),
