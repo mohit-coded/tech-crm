@@ -35,6 +35,121 @@ GitHub: mohit-coded/tech-crm (private), main branch
 - **Template for cancelling a running sequence of queued jobs (established with `SendCampaignStep`, Phase 6 Stage 2):** don't try to un-queue or delete a pending delayed job — there's no reliable handle for that once it's been dispatched. Instead, give the record the job acts on a live status flag (e.g. `CampaignEnrollment.status`), and have every job in the sequence re-fetch that record fresh from the DB as the first thing `handle()` does, then no-op immediately if the status is no longer what the job expects. Never trust `$this->someModel` as passed into the constructor for this check — it's a possibly-stale snapshot from whenever the job was dispatched (serialized, or just an in-memory copy if `handle()` is called directly in a test), not the live value. "Cancelling" the sequence then just means flipping that one flag; every already-queued future job harmlessly no-ops on its own when it eventually runs. Apply this same shape to any future multi-step delayed/queued sequence (e.g. a nurture drip, a multi-touch reminder chain) rather than inventing a way to reach into the queue and remove a specific pending job.
 - **Stale-relation gotcha (hit building `EnrollContactsOnStageEntry`, Phase 6 Stage 3):** after calling a method that updates a model's own attribute in place — `moveToStage()` updating `pipeline_stage_id` via `$this->update()` is the concrete case — don't trust an already-accessed relation on that *same in-memory instance* anywhere later in the same request/listener/job chain, even indirectly (e.g. the same object reused across two dispatches of the same event). Eloquent caches a `BelongsTo`/etc. relation the first time it's accessed and `update()` doesn't invalidate that cache, so `$model->someRelation` can keep returning the pre-update related row instead of the one the updated foreign key now points to. This bit the listener directly: it read `$opportunity->stage?->name` to get the newly-entered stage's name, but on a `moveToStage()` call that stage relation had already been cached (from `stage_id` before the move) by an earlier access — e.g. the same listener already having run once for that opportunity's *creation* — so it silently read the stage being moved *out of* instead of the one moved *into*. The fix, and the reusable lesson: look the related row up fresh by the id you actually have in hand (here, `PipelineStage::find($event->newStageId)`) rather than walking a relation off a model instance whose attributes changed underneath it — `$model->fresh()->someRelation` also works, but a direct fresh `Model::find($id)` on the id you already have is simpler when you don't need the rest of the model reloaded too. Caught by `CampaignTriggerTest`'s `moveToStage()` case failing against a listener that looked correct in isolation — worth remembering any time an event fired *after* an in-place `update()` needs to read the post-update related state through a relation.
 
+## Frontend Design System
+
+Cross-cutting, not tied to any one phase — this section covers the
+app's visual/design-token layer, which every future frontend stage
+builds on. Kept separate from the phase-by-phase backend sections
+below.
+
+### Semantic color tokens (Frontend Redesign, Stage A)
+- **The pattern:** each token is a CSS custom property holding a
+  space-separated `R G B` triplet (no `rgb()` wrapper, no commas) —
+  e.g. `--color-brand: 29 78 216;` — defined on `:root` in
+  `resources/css/app.css`, with a second `:root` block scoped inside
+  `@media (prefers-color-scheme: dark)` that overrides the same
+  variable names with the dark-mode values. `tailwind.config.js` then
+  points each Tailwind color key at `rgb(var(--color-x) /
+  <alpha-value>)` — the `<alpha-value>` placeholder is substituted by
+  Tailwind at build time with whatever opacity modifier is used
+  (`bg-brand/20` → alpha `0.2`, plain `bg-brand` → alpha `1`), which is
+  what keeps opacity utilities working on a CSS-variable-backed color;
+  a plain `rgb(var(--x))` with no `<alpha-value>` would ignore opacity
+  modifiers entirely.
+- **Why this shape, not `{ DEFAULT, dark }`:** the original proposal
+  for this token system was a `{ DEFAULT: '#...', dark: '#...' }`
+  object per color (mirroring how Tailwind's shade scales — `{
+  DEFAULT, 50, 100, ... }` — expand into suffixed classes). Tailwind's
+  `theme.colors` doesn't support that shape natively — there's no
+  built-in mechanism that turns a `dark` key into an automatic `dark:`
+  variant the way shade-scale keys expand into shade suffixes. Taken
+  literally, that proposal would only work by writing `dark:` at every
+  usage site — `bg-brand dark:bg-brand-dark`, on every element, forever
+  — which defeats the point of a token system. The CSS-variable
+  approach above is Tailwind's own documented pattern for exactly this
+  case: because the *variable itself* changes value under
+  `prefers-color-scheme: dark`, a class like `bg-surface` or
+  `text-primary` is dark-mode-aware on its own. No token here ever
+  needs a `dark:` prefix just to swap shades — `dark:` is still used
+  normally for anything that isn't just a color swap (e.g. a different
+  shadow or a layout change).
+- **`darkMode` stays `'media'` in `tailwind.config.js`, set explicitly
+  now rather than left as Tailwind's implicit default.** No `.dark`
+  class toggle exists anywhere in this app — every `dark:` utility
+  across the *entire* app (not just the redesigned pages) already
+  assumes OS-preference-driven dark mode. Switching to `'class'` would
+  silently break dark mode on every page that isn't part of this
+  redesign yet.
+- **Token names:** `bg-base`, `bg-surface`, `bg-nav`, `text-primary`,
+  `text-secondary`, `brand`, `status-success`, `status-warning`,
+  `status-danger`, `status-info`. Each has a light value (on the base
+  `:root`) and a dark value (inside the `prefers-color-scheme: dark`
+  block) — see `resources/css/app.css` for the actual RGB triplets.
+- **Going forward, all NEW Blade markup should use these semantic
+  tokens instead of raw Tailwind `gray-*`/`blue-*`/`indigo-*`/etc.
+  classes** — `bg-surface` not `bg-white dark:bg-gray-800`,
+  `text-secondary` not `text-gray-600 dark:text-gray-400`, `brand` not
+  `indigo-600`, and so on. Existing pages built before this stage still
+  use the old raw-gray classes and haven't been migrated — that's later
+  redesign-stage work, not a retroactive requirement — but anything new
+  should be written against the token set from the start.
+
+### Stage A scope (design tokens + root/login/register pages)
+- `GET /` now redirects — to `route('dashboard')` if `Auth::check()`,
+  otherwise `route('login')` — instead of rendering Laravel's default
+  welcome page. `resources/views/welcome.blade.php` was deleted
+  entirely, not just unlinked.
+- Redesigned `resources/views/auth/login.blade.php`,
+  `register.blade.php`, `forgot-password.blade.php`, and
+  `reset-password.blade.php`, plus the shared
+  `resources/views/layouts/guest.blade.php` they all render through
+  (a centered card on `bg-base`, using `bg-surface` for the card
+  itself, with a text-based "Tech**CRM**" wordmark — no logo asset
+  exists yet). All existing functionality (remember me, forgot-password
+  link, validation error display, the Business Name field on register)
+  is unchanged — this was a visual pass only.
+- **The shared form components these pages compose —
+  `x-text-input`, `x-input-label`, `x-input-error`, `x-primary-button`,
+  `x-auth-session-status` — were updated to the semantic tokens too,
+  not left on raw grays.** This was necessary to actually satisfy "no
+  raw gray-* classes" on the auth pages themselves (they're built from
+  these components), but it means every *other* page in the app that
+  already uses these same components — which is effectively every
+  admin CRUD form (Contacts, Funnels, Calendars, Campaigns, etc.) —
+  inherited the new token-based look automatically, not just the 4
+  auth pages. This was a deliberate, low-risk call: the token values
+  were chosen close to the existing grays specifically so this
+  side-effect wouldn't be jarring, and `x-primary-button` moving to the
+  `brand` token in particular gives the whole app a single consistent
+  primary-action color for the first time. Was not done: any
+  authenticated-app-only components (`x-nav-link`, `x-dropdown`,
+  `x-danger-button`, `x-secondary-button`, `x-application-logo`, the
+  main `navigation.blade.php`) — those remain on raw grays/indigo,
+  deferred to whichever later redesign stage covers the authenticated
+  app shell.
+- **Blade `$attributes->merge()` gotcha, worth remembering for any
+  future component-consuming redesign work:** passed-in classes land
+  *after* a component's own default classes in the rendered HTML
+  attribute, but CSS resolves same-specificity conflicts by
+  *stylesheet source order*, not HTML attribute order — so passing
+  `class="text-sm normal-case"` to a component that already sets
+  `text-xs uppercase` internally is **not** reliably guaranteed to
+  override it, regardless of which one appears later in the `class="
+  "` string. Safe: passing *new* classes for properties the component
+  doesn't already set (e.g. `x-primary-button` got `w-full
+  justify-center` added at call sites in the auth forms, since the
+  component's own classes never set `width` or `justify-content`).
+  Unsafe: trying to override a property the component's own default
+  classes already set on the same element.
+- Covered by `tests/Feature/ExampleTest.php` (rewritten — the previous
+  version asserted `GET /` returns 200, which is now genuinely wrong by
+  design, not a stale test to work around: replaced with a guest→login
+  redirect case and an authenticated→dashboard redirect case). No
+  visual/styling assertions exist anywhere (correctly — this was a
+  visual change); the full existing test suite (182 tests) was run
+  specifically to confirm nothing *functional* broke, and passed
+  unmodified otherwise.
+
 ## Build order (Phase 1 complete: 1a multi-tenancy foundation + 1b auth wiring/multi-location membership. Phase 2 complete: Opportunities/Pipeline, including the Kanban stage-move API. Phase 3 complete: Funnels/landing pages + lead capture, admin CRUD + public routes. Phase 4 complete: Calendars + Availability Rules (admin) plus the public booking flow (Phase 4b) — see below. Phase 5 complete: Conversations — data model, outbound SMS sending, inbound webhook, and inbox UI (5a/5b/5c) — see below; the one open item is real Twilio verification of outbound sending, still pending a trial-account upgrade. Phase 6 complete: Campaigns end to end — data model + admin CRUD (Stage 1), the execution engine that walks a `CampaignEnrollment` through its steps (Stage 2), and the trigger engine that auto-enrolls a contact when their `Opportunity` enters a matching pipeline stage (Stage 3) — see below. Phase 7 complete: appointment completion and its reputation-adjacent auto-enrollment trigger (Stage 1), plus the per-location Google review link setting and `{{placeholder}}` resolution that let a campaign's own message bodies carry real review-link/contact-name values (Stage 2) — see below. As scoped, this phase builds the machinery a review-request campaign runs on, not a specific seeded "leave us a review" campaign/template itself — that's ordinary campaign content an admin creates through the existing Phase 6 UI using this phase's `appointment_completed` trigger and `{{review_link}}`/`{{contact.first_name}}` placeholders, not further app code. Phase 8 basic Dashboard built with real data — see below; broader reporting still open. Phase 9 complete, closing out the roadmap's "FB Lead Ads + Google Business integrations" as originally scoped: OAuth connection infrastructure for Facebook/Google (`ConnectedAccount`, `FacebookOAuthClient`/`GoogleOAuthClient`, Stage 1), the Facebook Lead Ads webhook — verification handshake, signature-verified lead delivery, and Contact/Opportunity creation via the newly-shared `CapturesLeads` service (Stage 2) — and Google Business Profile connection with best-effort review-link auto-fill (Stage 3) — see below. **Overall unverified status, spanning Phases 5 and 9:** every real third-party integration built so far — `TwilioSmsSender` (Phase 5a), `FacebookOAuthClientImpl`/`GoogleOAuthClientImpl` (Phase 9 Stage 1), `FacebookLeadsClientImpl` (Stage 2), and `GoogleBusinessProfileClientImpl` (Stage 3) — is built to its respective provider's documented API shape and tested thoroughly against a fake, but **none of the five has ever actually been exercised against real developer credentials**. That verification pass, across all five, is the natural next step before any of this goes live for a real business — not a per-integration afterthought, a single remaining milestone this whole set of features is blocked on.)
 1. Auth + multi-tenant locations + Contacts/CRM base
 2. Opportunities/Pipeline (Kanban)
