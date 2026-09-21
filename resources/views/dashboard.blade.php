@@ -8,8 +8,18 @@
     <div class="py-12">
         <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
 
+            <!-- Range selector -->
+            <div class="flex items-center justify-end gap-2 px-4 sm:px-0">
+                @foreach (['7d' => __('7d'), '30d' => __('30d'), '90d' => __('90d'), 'all' => __('All')] as $value => $label)
+                    <a href="{{ route('dashboard', ['range' => $value]) }}"
+                            class="px-3 py-1.5 text-sm font-medium rounded-md {{ $range === $value ? 'bg-indigo-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700' }}">
+                        {{ $label }}
+                    </a>
+                @endforeach
+            </div>
+
             <!-- Stat cards -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
                 <div class="bg-white dark:bg-gray-800 overflow-hidden shadow-sm sm:rounded-lg">
                     <div class="p-6 text-gray-900 dark:text-gray-100">
                         <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -28,6 +38,20 @@
                         </div>
                         <div class="mt-1 text-3xl font-semibold">
                             ${{ number_format($pipelineValue, 2) }}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-gray-800 overflow-hidden shadow-sm sm:rounded-lg">
+                    <div class="p-6 text-gray-900 dark:text-gray-100">
+                        <div class="text-sm font-medium text-gray-500 dark:text-gray-400">
+                            {{ __('Conversion Rate') }}
+                        </div>
+                        <div class="mt-1 text-3xl font-semibold">
+                            {{ $conversionRate }}%
+                        </div>
+                        <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            {{ $wonInRange }} {{ __('won') }} / {{ $totalInRange }} {{ __('total') }}
                         </div>
                     </div>
                 </div>
