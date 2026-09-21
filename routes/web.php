@@ -7,6 +7,7 @@ use App\Http\Controllers\ConnectedAccountController;
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FacebookWebhookController;
 use App\Http\Controllers\FunnelController;
 use App\Http\Controllers\FunnelPublicController;
 use App\Http\Controllers\LocationSettingsController;
@@ -108,5 +109,19 @@ Route::get('/f/{slug}/book/confirmed', [FunnelPublicController::class, 'bookingC
 Route::post('/webhooks/twilio/sms', [TwilioWebhookController::class, 'sms'])
     ->middleware('twilio.signature')
     ->name('webhooks.twilio.sms');
+
+// Facebook Lead Ads webhook — public, split across two routes on the
+// same path because it's two entirely different checks: the GET
+// verification handshake (a one-time/occasional setup step, no
+// signature possible since there's no payload yet — see
+// FacebookWebhookController@verify) and the POST delivery of actual
+// lead notifications, which IS signature-protected (facebook.signature,
+// see VerifyFacebookSignature) and excluded from CSRF verification in
+// bootstrap/app.php, same reasoning as the Twilio webhook.
+Route::get('/webhooks/facebook/leads', [FacebookWebhookController::class, 'verify'])
+    ->name('webhooks.facebook.leads.verify');
+Route::post('/webhooks/facebook/leads', [FacebookWebhookController::class, 'leads'])
+    ->middleware('facebook.signature')
+    ->name('webhooks.facebook.leads');
 
 require __DIR__.'/auth.php';

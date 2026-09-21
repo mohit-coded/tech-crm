@@ -7,8 +7,8 @@ use App\Models\Appointment;
 use App\Models\Contact;
 use App\Models\Funnel;
 use App\Models\Opportunity;
-use App\Models\Pipeline;
 use App\Services\AvailabilitySlotCalculator;
+use App\Services\CapturesLeads;
 use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\RedirectResponse;
@@ -35,43 +35,15 @@ class FunnelPublicController extends Controller
             'phone' => ['required', 'string', 'max:255'],
         ]);
 
-        $contact = DB::transaction(function () use ($validated, $funnel) {
-            // No authenticated user on a public route, so BelongsToLocation's
-            // creating() auto-fill has nothing to key off — location_id must
-            // be set explicitly here, same reasoning as registration's
-            // default Pipeline (see RegisteredUserController@store).
-            $contact = Contact::create([
-                'location_id' => $funnel->location_id,
-                'first_name' => $validated['name'],
-                'email' => $validated['email'],
-                'phone' => $validated['phone'],
-            ]);
-
-            // Pipeline is BelongsToLocation-scoped, but that scope only
-            // activates for an authenticated user — on this public route
-            // Auth::user() is null, so it's inert. The location_id filter
-            // here is what actually keeps this tenant-safe.
-            $pipeline = Pipeline::where('location_id', $funnel->location_id)
-                ->where('is_default', true)
-                ->first()
-                ?? Pipeline::where('location_id', $funnel->location_id)->first();
-
-            $stage = $pipeline?->stages()->first();
-
-            abort_if(! $pipeline || ! $stage, 500, 'Funnel location has no pipeline to receive leads.');
-
-            Opportunity::create([
-                'location_id' => $funnel->location_id,
-                'contact_id' => $contact->id,
-                'pipeline_id' => $pipeline->id,
-                'pipeline_stage_id' => $stage->id,
-                'name' => $validated['name'],
-                'status' => 'open',
-                'source' => $funnel->name,
-            ]);
-
-            return $contact;
-        });
+        // Shared with FacebookWebhookController — see CapturesLeads for
+        // why this was extracted rather than duplicated a second time.
+        $contact = app(CapturesLeads::class)->capture(
+            $funnel->location_id,
+            $validated['name'],
+            $validated['email'],
+            $validated['phone'],
+            $funnel->name
+        );
 
         // Remembered so book(), if the visitor proceeds to booking next,
         // can pre-fill name/email/phone instead of making them retype it —

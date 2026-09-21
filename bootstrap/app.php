@@ -14,13 +14,17 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'twilio.signature' => \App\Http\Middleware\VerifyTwilioSignature::class,
+            'facebook.signature' => \App\Http\Middleware\VerifyFacebookSignature::class,
         ]);
 
-        // Twilio's webhook POST carries no Laravel CSRF token — signature
-        // verification (VerifyTwilioSignature) is what authenticates this
-        // route instead.
+        // Twilio's and Facebook's webhook POSTs carry no Laravel CSRF
+        // token — signature verification (VerifyTwilioSignature /
+        // VerifyFacebookSignature) is what authenticates these routes
+        // instead. The Facebook GET verification route needs no
+        // exception: CSRF is never checked on GET requests regardless.
         $middleware->validateCsrfTokens(except: [
             'webhooks/twilio/sms',
+            'webhooks/facebook/leads',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
