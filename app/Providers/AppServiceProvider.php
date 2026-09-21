@@ -8,6 +8,8 @@ use App\Listeners\EnrollContactsOnAppointmentCompletion;
 use App\Listeners\EnrollContactsOnStageEntry;
 use App\Services\Facebook\FacebookLeadsClient;
 use App\Services\Facebook\FacebookLeadsClientImpl;
+use App\Services\Google\GoogleBusinessProfileClient;
+use App\Services\Google\GoogleBusinessProfileClientImpl;
 use App\Services\OAuth\FacebookOAuthClient;
 use App\Services\OAuth\FacebookOAuthClientImpl;
 use App\Services\OAuth\GoogleOAuthClient;
@@ -43,6 +45,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(FacebookOAuthClient::class, fn () => new FacebookOAuthClientImpl());
         $this->app->singleton(GoogleOAuthClient::class, fn () => new GoogleOAuthClientImpl());
         $this->app->singleton(FacebookLeadsClient::class, fn () => new FacebookLeadsClientImpl());
+        $this->app->singleton(GoogleBusinessProfileClient::class, fn () => new GoogleBusinessProfileClientImpl());
     }
 
     /**

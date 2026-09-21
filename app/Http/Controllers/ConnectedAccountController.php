@@ -3,12 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Models\ConnectedAccount;
+use App\Services\Google\GoogleBusinessProfileClient;
 use App\Services\OAuth\FacebookOAuthClient;
 use App\Services\OAuth\GoogleOAuthClient;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * Phase 9 Stage 1: OAuth connection infrastructure for Facebook and
@@ -21,6 +24,11 @@ use Illuminate\Support\Str;
  * other route-model-bound controller in this app is: a cross-tenant id
  * simply doesn't bind and 404s before the method body runs, no manual
  * check needed.
+ *
+ * Phase 9 Stage 3 added a Google-only side effect to callback(): a
+ * best-effort auto-fill of the location's google_review_url from the
+ * newly-connected Business Profile's primary location — see
+ * autoFillGoogleReviewLinkIfMissing() below for the full reasoning.
  */
 class ConnectedAccountController extends Controller
 {
@@ -100,7 +108,59 @@ class ConnectedAccountController extends Controller
             ]
         );
 
+        if ($provider === 'google') {
+            $this->autoFillGoogleReviewLinkIfMissing($tokenResult->accessToken);
+        }
+
         return redirect()->route('settings.location.edit')->with('status', __('Account connected.'));
+    }
+
+    /**
+     * Best-effort only, and Facebook's callback path never reaches this
+     * at all (gated by the $provider === 'google' check above): fetches
+     * the newly-connected account's primary Google Business Profile
+     * location and, if it has a placeId, uses it to build a Google
+     * review link — but ONLY when this location doesn't already have
+     * one. Never overwrites a google_review_url the business owner
+     * already set manually via the Settings page (Phase 7) — silently
+     * clobbering a manually-entered value on every reconnect would be a
+     * real, surprising bug (imagine an owner who deliberately set a
+     * custom short link, or whose connected Business Profile changes to
+     * a different location later — reconnecting shouldn't quietly
+     * overwrite their choice).
+     *
+     * Failure here — no locations at all, or the Business Information
+     * API call throwing for any reason — must never fail the OAuth
+     * connection itself, which has already been saved by the time this
+     * runs. The owner can always set google_review_url by hand via
+     * Settings if this auto-fill doesn't pan out.
+     */
+    private function autoFillGoogleReviewLinkIfMissing(string $accessToken): void
+    {
+        $location = Auth::user()->currentLocation;
+
+        if (! blank($location->google_review_url)) {
+            return;
+        }
+
+        try {
+            $primaryLocation = app(GoogleBusinessProfileClient::class)->fetchPrimaryLocation($accessToken);
+        } catch (Throwable $e) {
+            Log::warning('Failed to auto-fill Google review link from Business Profile', [
+                'location_id' => $location->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        if (! $primaryLocation || ! $primaryLocation->placeId) {
+            return;
+        }
+
+        $location->update([
+            'google_review_url' => 'https://search.google.com/local/writereview?placeid='.urlencode($primaryLocation->placeId),
+        ]);
     }
 
     public function disconnect(ConnectedAccount $connectedAccount): RedirectResponse
