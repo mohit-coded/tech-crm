@@ -25,9 +25,14 @@ use Illuminate\Support\Facades\DB;
  */
 class CapturesLeads
 {
-    public function capture(int $locationId, ?string $name, ?string $email, ?string $phone, string $source): Contact
+    /**
+     * $funnelId records which Funnel (if any) the lead came through —
+     * passed by FunnelPublicController, deliberately omitted by
+     * FacebookWebhookController (a Facebook lead has no funnel).
+     */
+    public function capture(int $locationId, ?string $name, ?string $email, ?string $phone, string $source, ?int $funnelId = null): Contact
     {
-        return DB::transaction(function () use ($locationId, $name, $email, $phone, $source) {
+        return DB::transaction(function () use ($locationId, $name, $email, $phone, $source, $funnelId) {
             // No authenticated user on either of this service's current
             // callers (a public funnel form, a Facebook webhook), so
             // BelongsToLocation's creating() auto-fill has nothing to key
@@ -36,6 +41,7 @@ class CapturesLeads
             // (RegisteredUserController@store).
             $contact = Contact::create([
                 'location_id' => $locationId,
+                'funnel_id' => $funnelId,
                 // first_name is a NOT NULL column. FunnelPublicController's
                 // own form validation guarantees $name is never null for
                 // that caller, but a Facebook Lead Ad form can omit a name

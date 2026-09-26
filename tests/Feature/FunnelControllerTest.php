@@ -136,6 +136,32 @@ class FunnelControllerTest extends TestCase
         $this->assertSame($calendar->id, $funnel->fresh()->calendar_id);
     }
 
+    public function test_can_set_and_clear_a_funnels_offer_code(): void
+    {
+        [$user] = $this->makeUserWithLocation();
+        $this->actingAs($user);
+
+        $funnel = Funnel::factory()->create(['name' => 'Spring Promo', 'slug' => 'spring-promo']);
+
+        $fields = [
+            'name' => $funnel->name,
+            'slug' => $funnel->slug,
+            'headline' => $funnel->headline,
+            'button_text' => $funnel->button_text,
+        ];
+
+        $this->put("/funnels/{$funnel->id}", $fields + ['offer_code' => 'SPRING25'])
+            ->assertRedirect(route('funnels.index'));
+        $this->assertSame('SPRING25', $funnel->fresh()->offer_code);
+
+        $this->get("/funnels/{$funnel->id}/edit")->assertSee('SPRING25');
+
+        // Left blank, it's nullable (ConvertEmptyStringsToNull), not an error.
+        $this->put("/funnels/{$funnel->id}", $fields + ['offer_code' => ''])
+            ->assertRedirect(route('funnels.index'));
+        $this->assertNull($funnel->fresh()->offer_code);
+    }
+
     // Same cross-tenant-smuggling pattern as the AvailabilityRule test on
     // CalendarControllerTest: attempting to point your own funnel at a
     // calendar that belongs to a different location must be rejected, not

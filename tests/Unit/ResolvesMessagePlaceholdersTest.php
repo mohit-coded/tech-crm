@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\Contact;
+use App\Models\Funnel;
 use App\Models\Location;
 use App\Services\ResolvesMessagePlaceholders;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -37,6 +38,38 @@ class ResolvesMessagePlaceholdersTest extends TestCase
         $resolved = ResolvesMessagePlaceholders::resolve('Review us: {{review_link}}', $contact, $location);
 
         $this->assertSame('Review us: ', $resolved);
+    }
+
+    public function test_resolves_offer_code_from_the_contacts_originating_funnel(): void
+    {
+        $location = Location::factory()->create();
+        $funnel = Funnel::factory()->create(['location_id' => $location->id, 'offer_code' => 'SPRING25']);
+        $contact = Contact::factory()->create(['location_id' => $location->id, 'funnel_id' => $funnel->id]);
+
+        $resolved = ResolvesMessagePlaceholders::resolve('Your code: {{offer_code}}', $contact, $location);
+
+        $this->assertSame('Your code: SPRING25', $resolved);
+    }
+
+    public function test_offer_code_resolves_to_empty_string_when_the_funnel_has_no_code(): void
+    {
+        $location = Location::factory()->create();
+        $funnel = Funnel::factory()->create(['location_id' => $location->id, 'offer_code' => null]);
+        $contact = Contact::factory()->create(['location_id' => $location->id, 'funnel_id' => $funnel->id]);
+
+        $resolved = ResolvesMessagePlaceholders::resolve('Your code: {{offer_code}}', $contact, $location);
+
+        $this->assertSame('Your code: ', $resolved);
+    }
+
+    public function test_offer_code_resolves_to_empty_string_when_the_contact_has_no_funnel(): void
+    {
+        $location = Location::factory()->create();
+        $contact = Contact::factory()->create(['location_id' => $location->id, 'funnel_id' => null]);
+
+        $resolved = ResolvesMessagePlaceholders::resolve('Your code: {{offer_code}}', $contact, $location);
+
+        $this->assertSame('Your code: ', $resolved);
     }
 
     public function test_an_unrecognized_placeholder_is_left_untouched(): void

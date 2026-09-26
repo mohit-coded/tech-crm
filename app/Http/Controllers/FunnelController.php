@@ -77,6 +77,7 @@ class FunnelController extends Controller
             'headline' => ['required', 'string', 'max:255'],
             'subheadline' => ['nullable', 'string', 'max:255'],
             'button_text' => ['required', 'string', 'max:255'],
+            'offer_code' => ['nullable', 'string', 'max:255'],
             // Plain 'exists:calendars,id' would query the calendars table
             // directly, bypassing BelongsToLocation's global scope entirely
             // (the exists rule isn't Eloquent-aware) — that would let a

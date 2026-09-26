@@ -20,6 +20,9 @@ class ResolvesMessagePlaceholders
         $replacements = [
             '{{review_link}}' => $location->google_review_url ?? '',
             '{{contact.first_name}}' => $contact->first_name ?? '',
+            // Empty when the contact didn't come from a funnel (Facebook
+            // lead, manual contact) or its funnel has no code set.
+            '{{offer_code}}' => $contact->funnel?->offer_code ?? '',
         ];
 
         return strtr($body, $replacements);

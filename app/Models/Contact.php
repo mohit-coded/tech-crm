@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Models\Concerns\BelongsToLocation;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -19,11 +20,23 @@ class Contact extends Model
      */
     protected $fillable = [
         'location_id',
+        'funnel_id',
         'first_name',
         'last_name',
         'email',
         'phone',
     ];
+
+    /**
+     * The Funnel this Contact was captured through, if any — null for
+     * Facebook Lead Ads leads and manually-created contacts. Purely
+     * informational (e.g. {{offer_code}} resolution), not a tenant
+     * boundary: location_id is still what scopes a Contact.
+     */
+    public function funnel(): BelongsTo
+    {
+        return $this->belongsTo(Funnel::class);
+    }
 
     public function messages(): HasMany
     {

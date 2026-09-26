@@ -190,4 +190,45 @@ class FunnelPublicControllerTest extends TestCase
         $response->assertSee('Thank you!');
         $response->assertDontSee('Book Your Appointment');
     }
+
+    public function test_thank_you_page_promises_the_offer_code(): void
+    {
+        [$location] = $this->makeLocationWithPipeline();
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'slug' => 'offer-funnel',
+            'is_published' => true,
+        ]);
+
+        $this->post('/f/offer-funnel/submit', [
+            'name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response = $this->get('/f/offer-funnel');
+
+        $response->assertOk();
+        $response->assertSee('We will send you the offer code shortly.');
+    }
+
+    public function test_submitting_a_funnel_lead_records_the_originating_funnel_on_the_contact(): void
+    {
+        [$location] = $this->makeLocationWithPipeline();
+
+        $funnel = Funnel::factory()->create([
+            'location_id' => $location->id,
+            'slug' => 'origin-funnel',
+            'is_published' => true,
+        ]);
+
+        $this->post('/f/origin-funnel/submit', [
+            'name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $this->assertSame($funnel->id, Contact::withoutGlobalScopes()->sole()->funnel_id);
+    }
 }

@@ -20,7 +20,7 @@
                             {{ __('Thank you!') }}
                         </h1>
                         <p class="mt-2 text-gray-600 dark:text-gray-400">
-                            {{ __("We've received your information and will be in touch shortly.") }}
+                            {{ __('We will send you the offer code shortly.') }}
                         </p>
 
                         @if ($funnel->calendar_id && $funnel->calendar)

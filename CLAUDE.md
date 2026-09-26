@@ -296,9 +296,10 @@ below.
   behaves exactly as before for this caller — `store()` just calls
   `app(CapturesLeads::class)->capture($funnel->location_id,
   $validated['name'], $validated['email'], $validated['phone'],
-  $funnel->name)` now instead of inlining it. See the `CapturesLeads`
-  entry under Phase 9 Stage 2 below for why this moved and what the
-  shared service actually does.
+  $funnel->name, $funnel->id)` now instead of inlining it (the trailing
+  `$funnel->id` was added later — see Funnel offer codes below). See
+  the `CapturesLeads` entry under Phase 9 Stage 2 below for why this
+  moved and what the shared service actually does.
 - Covered by `tests/Feature/FunnelControllerTest.php` (admin CRUD
   tenant isolation, same shape as `ContactControllerTest`) and
   `tests/Feature/FunnelPublicControllerTest.php` (published vs.
@@ -1359,7 +1360,9 @@ below.
   speculative future one — extracting it now means a future change to
   that fallback logic only has to be made, and tested, in one place.
   `capture(int $locationId, ?string $name, ?string $email, ?string
-  $phone, string $source): Contact` takes every value as an **explicit
+  $phone, string $source, ?int $funnelId = null): Contact` (the
+  trailing `$funnelId` was added later — see Funnel offer codes below)
+  takes every value as an **explicit
   parameter** — no implicit `Auth::user()`/`BelongsToLocation`
   auto-fill reliance, since neither of this service's current callers
   (a public funnel form, a public Facebook webhook) has an
@@ -1473,3 +1476,73 @@ below.
   directly against the fake's recorded call list), proving the
   `$provider === 'google'` gate keeps Facebook's callback path
   completely unaffected by this stage's changes.
+
+### Funnel offer codes (post-Phase 9 addition)
+- **Why this exists:** the funnel thank-you page
+  (`funnels/public.blade.php`'s `session('submitted')` state) was
+  reworded from "We've received your information and will be in touch
+  shortly." to **"We will send you the offer code shortly."** — which
+  promised something nothing in the app could actually deliver. This
+  feature closes that gap. That copy was not asserted by any test
+  before; it now is (`FunnelPublicControllerTest::
+  test_thank_you_page_promises_the_offer_code`, driving the real
+  `submit` → thank-you flow).
+- **Schema:** `funnels.offer_code` (nullable string, in `Funnel::
+  $fillable`) holds the funnel's code. `contacts.funnel_id` (nullable
+  FK → `funnels`, `nullOnDelete`, in `Contact::$fillable`, with a new
+  `Contact::funnel(): BelongsTo`) records which funnel a lead came
+  through. **It is only ever set for funnel-originated leads** —
+  Facebook Lead Ads leads and manually-created contacts have no
+  originating funnel and correctly stay `null`. `funnel_id` is purely
+  informational, **not a new tenant boundary**: `location_id` is still
+  what scopes a `Contact`, and no isolation logic keys off `funnel_id`.
+- **`CapturesLeads::capture()` gained an optional trailing `?int
+  $funnelId = null`**, written straight onto `Contact::create()`. Only
+  `FunnelPublicController@store` passes it (`$funnel->id`);
+  `FacebookWebhookController` deliberately doesn't, since a Facebook
+  lead has no funnel — the default `null` is the correct value there,
+  not a missing argument. Defaulting it (rather than making it
+  required) is what let the Facebook caller stay byte-for-byte
+  unchanged.
+- **Admin form:** an optional "Offer Code" text field on the funnel
+  create/edit form (`funnels/_form.blade.php`), validated
+  `nullable|string|max:255` in `FunnelController::validated()` — blank
+  saves as `null` via `ConvertEmptyStringsToNull`. **Blade gotcha:** the
+  field's help text displays the placeholder syntax literally, which
+  can't go inside a `{{ __('... {{offer_code}} ...') }}` echo — Blade's
+  echo regex is non-greedy and would end the outer echo at the inner
+  `}}`, breaking compilation. It's written as `@{{offer_code}}` *outside*
+  the `__()` echo instead (`@{{ }}` is Blade's escape for a literal
+  `{{ }}`). Worth remembering anywhere else placeholder syntax needs to
+  be shown in a view. The help text uses the `text-secondary` token, per
+  the design-system rule for new markup.
+- **`{{offer_code}}` placeholder** added to
+  `ResolvesMessagePlaceholders` (alongside Phase 7 Stage 2's
+  `{{review_link}}`/`{{contact.first_name}}`): resolves via
+  `$contact->funnel?->offer_code ?? ''`. Empty string for **both** "the
+  contact has no `funnel_id`" and "the funnel has no `offer_code` set" —
+  same "never leave the literal placeholder behind" rule as
+  `{{review_link}}`. Note `Funnel` is `BelongsToLocation`-scoped, so in
+  an authenticated context `$contact->funnel` only resolves within the
+  acting user's current location; that's never a real mismatch today
+  (a contact's funnel is always in its own location, set server-side by
+  `CapturesLeads`), and if it ever were, it fails safe to `''`.
+- **This does not send anything automatically by itself.** It only
+  makes the code *available* to campaign messages. For a lead to
+  actually receive their code, an admin still has to create a campaign
+  (existing Phase 6 UI) whose trigger fires on lead creation — e.g.
+  `opportunity_stage:New Leads`, the first stage new leads land in —
+  with `{{offer_code}}` in a step body (e.g. `Hi
+  {{contact.first_name}}, your offer code is {{offer_code}}`). Same
+  "machinery, not seeded content" stance as Phase 7's review-request
+  campaign. Actual delivery is also still subject to the unverified
+  Twilio outbound-send status (Phase 5a).
+- Covered by: `FunnelPublicControllerTest` (thank-you copy; a funnel
+  submission sets the contact's `funnel_id` to that funnel);
+  `FacebookWebhookTest` (the existing happy-path case now also asserts
+  `funnel_id` is `null`); `Tests\Unit\ResolvesMessagePlaceholdersTest`
+  (real code resolves; empty string when the funnel has no code; empty
+  string when the contact has no funnel — tested separately);
+  `FunnelControllerTest` (setting an offer code, seeing it on the edit
+  page, clearing it back to `null`). The full suite (193 tests),
+  including every existing tenant-isolation test, passed unmodified.

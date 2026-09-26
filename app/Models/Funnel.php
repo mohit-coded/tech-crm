@@ -24,6 +24,7 @@ class Funnel extends Model
         'headline',
         'subheadline',
         'button_text',
+        'offer_code',
         'is_published',
     ];
 

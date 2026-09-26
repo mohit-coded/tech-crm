@@ -42,7 +42,8 @@ class FunnelPublicController extends Controller
             $validated['name'],
             $validated['email'],
             $validated['phone'],
-            $funnel->name
+            $funnel->name,
+            $funnel->id
         );
 
         // Remembered so book(), if the visitor proceeds to booking next,

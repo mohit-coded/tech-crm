@@ -37,6 +37,16 @@
 </div>
 
 <div class="mt-4">
+    <x-input-label for="offer_code" :value="__('Offer Code')" />
+    <x-text-input id="offer_code" class="block mt-1 w-full" type="text" name="offer_code"
+            :value="old('offer_code', $funnel->offer_code ?? '')" />
+    <p class="mt-1 text-sm text-secondary">
+        {{ __('Sent to leads from this funnel via the') }} <code>@{{offer_code}}</code> {{ __('placeholder in campaign messages.') }}
+    </p>
+    <x-input-error :messages="$errors->get('offer_code')" class="mt-2" />
+</div>
+
+<div class="mt-4">
     <x-input-label for="calendar_id" :value="__('Booking Calendar')" />
     <select id="calendar_id" name="calendar_id"
             class="block mt-1 w-full border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 focus:border-indigo-500 dark:focus:border-indigo-600 focus:ring-indigo-500 dark:focus:ring-indigo-600 rounded-md shadow-sm">

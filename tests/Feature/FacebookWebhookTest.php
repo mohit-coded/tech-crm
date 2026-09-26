@@ -135,6 +135,8 @@ class FacebookWebhookTest extends TestCase
         $this->assertSame('Jane Doe', $contact->first_name);
         $this->assertSame('jane@example.com', $contact->email);
         $this->assertSame('+15551234567', $contact->phone);
+        // A Facebook lead has no originating funnel.
+        $this->assertNull($contact->funnel_id);
 
         $opportunity = Opportunity::withoutGlobalScopes()->sole();
         $this->assertSame($location->id, $opportunity->location_id);
