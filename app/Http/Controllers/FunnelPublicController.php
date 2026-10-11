@@ -25,6 +25,22 @@ class FunnelPublicController extends Controller
         return view('funnels.public', ['funnel' => $funnel]);
     }
 
+    /**
+     * The same headline/form as show(), with no page chrome, meant to
+     * fill the iframe public/embed.js puts on a client's own website.
+     * This is the only route exempt from FrameGuard (see routes/web.php).
+     * The form posts to the same store() endpoint as show().
+     */
+    public function embed(Request $request, string $slug): View
+    {
+        $funnel = $this->publishedFunnel($slug);
+
+        return view('funnels.embed', [
+            'funnel' => $funnel,
+            'submitted' => $request->boolean('submitted'),
+        ]);
+    }
+
     public function store(Request $request, string $slug): RedirectResponse
     {
         $funnel = $this->publishedFunnel($slug);
@@ -53,6 +69,17 @@ class FunnelPublicController extends Controller
         // Scoped by funnel slug in case a visitor has two different funnel
         // submissions active in the same session.
         session(["funnel_contact_id.{$funnel->slug}" => $contact->id]);
+
+        // Submitted from the embed widget, inside an iframe on a client's
+        // site. There the session cookie is never sent back (SameSite=lax,
+        // cross-site iframe), so the 'submitted' flash below would be lost
+        // and the visitor would just see an empty form again. Carry the
+        // thank-you state in the URL instead. It's only display state:
+        // anyone could load ?submitted=1 and see a thank-you message,
+        // which reveals nothing.
+        if ($request->boolean('embed')) {
+            return redirect()->route('funnels.public.embed', ['slug' => $funnel->slug, 'submitted' => 1]);
+        }
 
         return redirect()->route('funnels.public.show', $funnel->slug)->with('submitted', true);
     }

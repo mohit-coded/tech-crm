@@ -98,6 +98,15 @@ Route::middleware('auth')->group(function () {
 // scope, which is inert with no authenticated user.
 Route::get('/f/{slug}', [FunnelPublicController::class, 'show'])->name('funnels.public.show');
 Route::post('/f/{slug}/submit', [FunnelPublicController::class, 'store'])->name('funnels.public.submit');
+
+// The ONLY route allowed to be framed by a third-party site (it's the
+// iframe public/embed.js creates on a client's own website), so it alone
+// opts out of the FrameGuard appended to the 'web' group in
+// bootstrap/app.php. Every other web route keeps X-Frame-Options:
+// SAMEORIGIN.
+Route::get('/f/{slug}/embed', [FunnelPublicController::class, 'embed'])
+    ->name('funnels.public.embed')
+    ->withoutMiddleware(\Illuminate\Http\Middleware\FrameGuard::class);
 Route::get('/f/{slug}/book', [FunnelPublicController::class, 'book'])->name('funnels.public.book');
 Route::post('/f/{slug}/book/confirm', [FunnelPublicController::class, 'confirmBooking'])->name('funnels.public.book.confirm');
 Route::get('/f/{slug}/book/confirmed', [FunnelPublicController::class, 'bookingConfirmed'])->name('funnels.public.book.confirmed');
