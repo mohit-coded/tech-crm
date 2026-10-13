@@ -15,6 +15,7 @@ use App\Http\Controllers\LocationSwitchController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\OpportunityBoardController;
 use App\Http\Controllers\OpportunityStageController;
+use App\Http\Controllers\OpportunityStatusController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\TwilioWebhookController;
 use Illuminate\Support\Facades\Auth;
@@ -90,6 +91,7 @@ Route::middleware('auth')->group(function () {
     // Same-origin fetch() from board.blade.php, session-authenticated —
     // belongs here, not in api.php (see CLAUDE.md routing convention).
     Route::patch('/api/opportunities/{opportunity}/stage', [OpportunityStageController::class, 'update']);
+    Route::patch('/api/opportunities/{opportunity}/status', [OpportunityStatusController::class, 'update']);
 });
 
 // Public funnel pages — anonymous visitors, deliberately outside the

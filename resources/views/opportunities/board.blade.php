@@ -44,6 +44,8 @@
                                 @foreach ($stage->opportunities as $opportunity)
                                     <div
                                         data-opportunity-id="{{ $opportunity->id }}"
+                                        x-data="opportunityCard({{ $opportunity->id }})"
+                                        :class="status !== 'open' && 'js-no-drag opacity-60 cursor-default'"
                                         class="cursor-move rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 p-3 text-sm shadow-sm"
                                     >
                                         <div class="font-medium text-gray-900 dark:text-gray-100">{{ $opportunity->name }}</div>
@@ -52,6 +54,33 @@
                                         </div>
                                         <div class="mt-1 font-medium text-gray-700 dark:text-gray-300">
                                             ${{ number_format($opportunity->monetary_value, 2) }}
+                                        </div>
+
+                                        {{-- Closing a deal is separate from moving stages. A
+                                             closed card stays put (dimmed, no longer draggable)
+                                             until reload; the board only loads open
+                                             opportunities, so it's gone after that. --}}
+                                        <div class="mt-2 flex items-center gap-2">
+                                            <template x-if="status === 'open'">
+                                                <div class="flex gap-2">
+                                                    <button type="button" x-on:click="setStatus('won')" :disabled="saving"
+                                                            class="js-no-drag rounded px-2 py-0.5 text-xs font-medium text-status-success border border-status-success/40 hover:bg-status-success/10 disabled:opacity-50">
+                                                        {{ __('Won') }}
+                                                    </button>
+                                                    <button type="button" x-on:click="setStatus('lost')" :disabled="saving"
+                                                            class="js-no-drag rounded px-2 py-0.5 text-xs font-medium text-status-danger border border-status-danger/40 hover:bg-status-danger/10 disabled:opacity-50">
+                                                        {{ __('Lost') }}
+                                                    </button>
+                                                </div>
+                                            </template>
+                                            <span x-show="status === 'won'" style="display: none;"
+                                                    class="rounded-full px-2 py-0.5 text-xs font-medium bg-status-success/15 text-status-success">
+                                                {{ __('Won') }}
+                                            </span>
+                                            <span x-show="status === 'lost'" style="display: none;"
+                                                    class="rounded-full px-2 py-0.5 text-xs font-medium bg-status-danger/15 text-status-danger">
+                                                {{ __('Lost') }}
+                                            </span>
                                         </div>
                                     </div>
                                 @endforeach
@@ -72,6 +101,11 @@
                     Sortable.create(this.$el, {
                         group: 'opportunities',
                         animation: 150,
+                        // Won/Lost buttons, and cards already closed, never
+                        // start a drag. preventOnFilter: false so the
+                        // buttons' own click events still fire.
+                        filter: '.js-no-drag',
+                        preventOnFilter: false,
                         onEnd: (evt) => {
                             if (evt.to !== evt.from) {
                                 this.handleMove(evt);
@@ -105,6 +139,38 @@
                         this.$dispatch('opportunity-move-failed', {
                             message: 'Could not move opportunity — please try again.',
                         });
+                    }
+                },
+            }));
+
+            Alpine.data('opportunityCard', (opportunityId) => ({
+                status: 'open',
+                saving: false,
+                async setStatus(newStatus) {
+                    this.saving = true;
+
+                    try {
+                        const response = await fetch(`/api/opportunities/${opportunityId}/status`, {
+                            method: 'PATCH',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json',
+                                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                            },
+                            body: JSON.stringify({ status: newStatus }),
+                        });
+
+                        if (!response.ok) {
+                            throw new Error('Status update failed');
+                        }
+
+                        this.status = newStatus;
+                    } catch (e) {
+                        this.$dispatch('opportunity-move-failed', {
+                            message: 'Could not update opportunity — please try again.',
+                        });
+                    } finally {
+                        this.saving = false;
                     }
                 },
             }));

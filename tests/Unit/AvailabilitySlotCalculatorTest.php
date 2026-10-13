@@ -22,6 +22,18 @@ class AvailabilitySlotCalculatorTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // The calculator drops already-past slots when the date requested is
+        // today, so these fixed-date tests must not depend on the real clock:
+        // left unfrozen, each one started failing on its own date once its
+        // slot times had passed. Pin "now" before every fixture date. The
+        // "today" test below overrides this with its own setTestNow().
+        Carbon::setTestNow(Carbon::parse('2026-01-01 00:00:00', 'UTC'));
+    }
+
     protected function tearDown(): void
     {
         Carbon::setTestNow();
