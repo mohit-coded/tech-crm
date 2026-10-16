@@ -215,6 +215,31 @@ class AvailabilitySlotCalculatorTest extends TestCase
         $this->assertSame(['10:30', '11:00', '11:30'], $this->startTimes($slots));
     }
 
+    // Scenario: requesting a weekday well in the past, on a calendar open
+    // Mon-Fri -> no slots at all, since every one of them has already
+    // happened.
+    public function test_requesting_a_past_date_returns_no_slots(): void
+    {
+        $calendar = $this->makeCalendar(['duration_minutes' => 30]);
+
+        foreach ([1, 2, 3, 4, 5] as $dayOfWeek) {
+            $calendar->availabilityRules()->create([
+                'day_of_week' => $dayOfWeek, 'start_time' => '09:00', 'end_time' => '17:00',
+            ]);
+        }
+
+        Carbon::setTestNow(Carbon::parse('2026-03-18 12:00:00', 'UTC'));
+        $pastDate = Carbon::parse('2026-03-18', 'UTC')->subDays(30);
+
+        // Guard the fixture itself: the date must land on a day the rules
+        // cover, or this would pass for the wrong reason.
+        $this->assertTrue($pastDate->isWeekday());
+
+        $slots = (new AvailabilitySlotCalculator())->getAvailableSlots($calendar, $pastDate);
+
+        $this->assertSame([], $slots);
+    }
+
     // Scenario: a calendar with no rules for the requested day -> empty
     // array, no error.
     public function test_calendar_with_no_rules_for_the_requested_day_returns_empty_array(): void

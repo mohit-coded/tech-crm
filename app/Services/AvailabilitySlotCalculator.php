@@ -39,14 +39,17 @@ class AvailabilitySlotCalculator
 
         $bookedIntervals = $this->bookedIntervals($calendar, $timezone, $localDate);
 
-        $now = Carbon::now($timezone);
-        $isToday = $localDate->isSameDay($now);
+        // Any slot that has already started is unbookable, on every date —
+        // not just today. A past date therefore yields no slots at all,
+        // which is also what stops confirmBooking() (which re-runs this
+        // calculator) from accepting a past booking.
+        $nowUtc = Carbon::now('UTC');
 
         $slots = [];
 
         foreach ($rules as $rule) {
             foreach ($this->candidateSlotsForRule($rule, $localDate, $calendar->duration_minutes) as $slot) {
-                if ($isToday && $slot['start']->lt($now)) {
+                if ($slot['start']->clone()->setTimezone('UTC')->lt($nowUtc)) {
                     continue;
                 }
 
@@ -63,7 +66,7 @@ class AvailabilitySlotCalculator
         return $slots;
     }
 
-    private function resolveTimezone(Calendar $calendar): string
+    public function resolveTimezone(Calendar $calendar): string
     {
         return $calendar->timezone
             ?? $calendar->location?->timezone

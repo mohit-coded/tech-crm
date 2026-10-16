@@ -24,7 +24,7 @@
                 <form method="GET" action="{{ route('funnels.public.book', $funnel->slug) }}" class="mt-6">
                     <x-input-label for="date" :value="__('Choose a date')" />
                     <x-text-input id="date" class="block mt-1 w-full" type="date" name="date"
-                            :value="$date?->format('Y-m-d')" required />
+                            :value="$date?->format('Y-m-d')" :min="$minDate" required />
                     <x-input-error :messages="$errors->get('date')" class="mt-2" />
 
                     <x-primary-button class="mt-3">

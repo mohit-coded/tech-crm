@@ -106,13 +106,18 @@ class FunnelPublicController extends Controller
 
         $date = isset($validated['date']) ? Carbon::parse($validated['date']) : null;
 
+        $calculator = new AvailabilitySlotCalculator();
+
         $slots = $date
-            ? (new AvailabilitySlotCalculator())->getAvailableSlots($funnel->calendar, $date)
+            ? $calculator->getAvailableSlots($funnel->calendar, $date)
             : [];
 
         return view('funnels.book', [
             'funnel' => $funnel,
             'date' => $date,
+            // UX only — the date picker's min. The calculator dropping
+            // already-started slots is the real guard against past bookings.
+            'minDate' => Carbon::now($calculator->resolveTimezone($funnel->calendar))->format('Y-m-d'),
             'slots' => $slots,
             'prefillContact' => $this->sessionContactFor($funnel),
         ]);

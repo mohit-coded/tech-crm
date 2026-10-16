@@ -20,6 +20,23 @@ class FunnelBookingTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // The calculator never offers a slot that has already started, so
+        // bookingDate() must stay in the future regardless of the real
+        // clock. Tests needing a different "now" set their own.
+        Carbon::setTestNow(Carbon::parse('2026-09-28 12:00:00', 'UTC'));
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+
+        parent::tearDown();
+    }
+
     /**
      * A fixed future date, always used together with a rule for its own
      * day-of-week so tests don't depend on when they happen to run.
@@ -507,5 +524,63 @@ class FunnelBookingTest extends TestCase
             ->toSql();
 
         $this->assertStringContainsStringIgnoringCase('for update', $mysqlSql);
+    }
+
+    public function test_booking_page_date_picker_has_min_of_today_in_the_calendars_timezone(): void
+    {
+        // 23:00 UTC on Sep 28 is already Sep 29 in Asia/Kolkata (+05:30).
+        Carbon::setTestNow(Carbon::parse('2026-09-28 23:00:00', 'UTC'));
+
+        [$location, $calendar] = $this->makeLocationWithCalendar();
+        $calendar->update(['timezone' => 'Asia/Kolkata']);
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => $calendar->id,
+            'slug' => 'book-test',
+            'is_published' => true,
+        ]);
+
+        $this->get('/f/book-test/book')
+            ->assertOk()
+            ->assertSee('min="2026-09-29"', false);
+    }
+
+    public function test_confirming_a_booking_for_a_past_datetime_is_rejected(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-03-18 12:00:00', 'UTC'));
+        $pastDate = Carbon::parse('2026-03-18', 'UTC')->subDays(30);
+        $this->assertTrue($pastDate->isWeekday());
+
+        $location = Location::factory()->create(['timezone' => 'UTC']);
+        $calendar = Calendar::factory()->create([
+            'location_id' => $location->id,
+            'timezone' => 'UTC',
+            'duration_minutes' => 30,
+        ]);
+
+        foreach ([1, 2, 3, 4, 5] as $dayOfWeek) {
+            $calendar->availabilityRules()->create([
+                'day_of_week' => $dayOfWeek, 'start_time' => '09:00', 'end_time' => '17:00',
+            ]);
+        }
+
+        Funnel::factory()->create([
+            'location_id' => $location->id,
+            'calendar_id' => $calendar->id,
+            'slug' => 'book-test',
+            'is_published' => true,
+        ]);
+
+        $response = $this->post('/f/book-test/book/confirm', [
+            'date' => $pastDate->format('Y-m-d'),
+            'start_time' => '09:00',
+            'name' => 'Jane Doe',
+            'email' => 'jane@example.com',
+            'phone' => '555-1234',
+        ]);
+
+        $response->assertSessionHasErrors();
+        $this->assertSame(0, Appointment::withoutGlobalScopes()->count());
     }
 }
